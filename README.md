@@ -28,7 +28,7 @@
 | `CONTRIBUTING.md` | Git·코드·실험 컨벤션 |
 | `baselines/organizer_v7/` | 비교용 운영진 원본 코드 5개. 데이터·노트북·실행 결과 제외 |
 | `docs/rules_review.md` | 공식 안내 대조 결과와 아직 확인하지 않은 항목 |
-| `docs/server_quickstart.md` | `initial-setup` 브랜치를 서버에서 받아 학습·추론하는 순서 |
+| `docs/server_quickstart.md` | `main` 브랜치를 개인 서버 폴더에 받아 학습·추론하는 순서 |
 
 ## 시작 순서: 주최 측 GPU 서버 가이드 기준
 
@@ -61,13 +61,24 @@ test -d /home/ubuntu/data/baseline/uni_d_baseline_v7 && echo "베이스라인 �
 
 이미 맥의 `open/`에 둔 데이터는 이 서버 작업 흐름에 필요하지 않습니다. 서버 데이터는 `/home/ubuntu/data/battery_data_light`를 팀원이 함께 참조하고, 각자 폴더에 복제하지 않습니다.
 
-### 2. 개인 코드 폴더 준비
+### 2. 팀원마다 개인 코드 폴더 준비
 
-서버에서는 `mkdir -p /home/ubuntu/seungbeom`으로 개인 폴더를 준비하고, **팀 레포의 실행용 사본을 이 폴더 아래에 clone**합니다. 코드 편집은 맥 로컬 VS Code에서 진행합니다. 변경한 코드를 GitHub에 push한 뒤 서버의 같은 작업 브랜치에서 pull하고 실행합니다. 로컬 파일과 SSH 서버 파일은 자동 동기화되지 않습니다. 기존 서버 레포에 미커밋 변경이 있다면 먼저 보존·정리하며, Git 인증은 사용자가 직접 처리합니다.
+서버에서는 **각자 `/home/ubuntu/<본인이름>/`을 만들고 그 아래에 팀 레포를 clone**합니다. GitHub 저장소는 함께 사용하되 서버의 실행용 사본은 개인별로 둡니다. `seungbeom`은 승범의 폴더명 예시이며, 모든 팀원이 이 폴더에 들어갈 필요는 없습니다.
+
+```text
+/home/ubuntu/
+├── venv/                              # 팀 공용 Python 환경
+├── data/                              # 팀 공용 데이터·운영진 원본
+├── seungbeom/unid_datathon_team18/     # 승범의 실행용 레포·실험 결과
+├── member_a/unid_datathon_team18/      # 팀원 A: 실제 이름으로 변경
+└── member_b/unid_datathon_team18/      # 팀원 B: 실제 이름으로 변경
+```
+
+코드 편집은 맥 로컬 VS Code에서 진행합니다. 변경한 코드를 GitHub에 push한 뒤 **본인 서버 레포의 같은 작업 브랜치**에서 pull하고 실행합니다. 로컬 파일과 SSH 서버 파일은 자동 동기화되지 않습니다. 기존 서버 레포에 미커밋 변경이 있다면 먼저 보존·정리하며, Git 인증은 사용자가 직접 처리합니다. 데이터와 가상환경은 개인 폴더마다 다시 설치하지 않습니다.
 
 이 팀 레포를 사용할 때는 베이스라인을 레포 위에 복사하지 않습니다. 원본 베이스라인을 따로 실행하고 싶을 때만 가이드 3-2절처럼 아직 존재하지 않는 개인 경로로 복사합니다. 공용 베이스라인 원본은 수정하지 않습니다.
 
-초기 세팅과 운영진 베이스라인 소스는 `initial-setup` 브랜치에서 관리합니다. 서버 초기 설치를 완료했다면 [서버 실행 안내](docs/server_quickstart.md)에 따라 해당 브랜치를 clone하고, 환경 확인 → 학습 → 제출 검사를 진행하세요.
+초기 세팅과 운영진 베이스라인 소스는 공통 브랜치 `main`에서 받습니다. `initial-setup`은 초기 작업에 사용한 브랜치입니다. 서버 초기 설치를 완료했다면 [서버 실행 안내](docs/server_quickstart.md)에 따라 `main`을 clone하고, 환경 확인 → 학습 → 제출 검사를 진행하세요. 이미 `initial-setup`을 받은 팀원은 같은 안내의 5절에 따라 본인 레포를 `main`으로 전환합니다.
 
 ## 선택: 맥 로컬 코드 검증 환경
 
@@ -106,7 +117,7 @@ nvidia-smi
 
 ## 학습
 
-서버에서 GPU 사용을 팀원과 조율한 뒤, 먼저 이 한 줄만 실행합니다.
+서버에서 GPU 사용을 팀원과 조율한 뒤, 먼저 이 한 줄만 실행합니다. **이하 학습·추론 명령은 승범의 예시이므로 다른 팀원은 `seungbeom`을 본인 폴더명으로 바꿉니다.** 개인 폴더를 나눠도 GPU와 Python 환경은 공용입니다.
 
 ```bash
 tmux new -s train-seungbeom
@@ -115,12 +126,13 @@ tmux new -s train-seungbeom
 새 화면이 열리면 가상환경을 활성화하고 **서버의 본인 코드 저장소로 이동한 뒤** 아래 명령을 실행하세요. 같은 tmux 세션이 이미 있으면 `tmux attach -t train-seungbeom`으로 접속합니다.
 
 ```bash
+cd /home/ubuntu/seungbeom/unid_datathon_team18
 source /home/ubuntu/venv/bin/activate
 PROJECT_DATA_ROOT=/home/ubuntu/data/battery_data_light
 python -u train.py \
   --data_dir "$PROJECT_DATA_ROOT" \
   --config configs/baseline.json \
-  --run_dir runs/exp001_fusion_seed42 \
+  --run_dir runs/seungbeom/exp001_fusion_seed42 \
   --model_out weights/model.pt
 ```
 
@@ -135,18 +147,20 @@ python -u train.py \
 
 ## 추론과 제출 검사
 
-**SSH 서버 터미널에서 실행합니다.** 학습 후 `weights/model.pt`가 준비되면 제출 필수 인자 세 개만으로 동작합니다.
+**SSH 서버 터미널의 본인 레포에서 실행합니다.** 학습 후 해당 레포 안에 `weights/model.pt`가 준비되면 제출 필수 인자 세 개만으로 동작합니다. 아래 결과도 본인 레포의 `outputs/` 안에 저장됩니다.
 
 ```bash
+cd /home/ubuntu/seungbeom/unid_datathon_team18
+source /home/ubuntu/venv/bin/activate
 PROJECT_DATA_ROOT=/home/ubuntu/data/battery_data_light
 python test.py \
   --input "$PROJECT_DATA_ROOT/test/test.csv" \
   --image_root "$PROJECT_DATA_ROOT/test" \
-  --output outputs/submission_exp001.csv
+  --output outputs/seungbeom/submission_exp001.csv
 
 python check_submission.py \
   --data_dir "$PROJECT_DATA_ROOT" \
-  --final outputs/submission_exp001.csv
+  --final outputs/seungbeom/submission_exp001.csv
 ```
 
 `sample_submission.csv`가 데이터 루트 밖에 있으면 점검 도구의 `--sample_submission /실제/경로/sample_submission.csv`로 지정합니다. 이 도구는 **공식 가이드의 검사 항목을 구현한 팀 자체 도구**이며 운영진 배포 스크립트 자체가 아닙니다. 최종 선택 파일 재현, 반복 실행, 입력 행 섞기, 실험 분리, 미래 행 제거, 임의 부분 입력을 검사합니다. 제공받은 운영진 점검 도구도 제출 전에 별도로 실행하세요.

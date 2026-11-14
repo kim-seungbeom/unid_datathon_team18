@@ -4,21 +4,35 @@
 
 아래 명령은 모두 사용자가 **GPU 서버에 SSH로 연결된 VS Code 터미널**에서 실행합니다. 운영진 `setup.sh`를 완료한 상태를 전제로 하며, 데이터 재다운로드나 서버에 Codex를 설치하는 과정은 없습니다.
 
-## 1. 코드 받기 — 최초 한 번
+## 1. 각자 개인 폴더에 코드 받기 — 팀원마다 최초 한 번
+
+**팀원마다 `/home/ubuntu/<본인이름>/unid_datathon_team18`에 실행용 레포를 따로 둡니다.** GitHub 저장소는 하나를 함께 쓰고, 서버에서 받는 사본만 개인별로 구분합니다. `/home/ubuntu/seungbeom`으로 모두 모일 필요는 없습니다.
+
+| 대상 | 서버 위치 | 사용 방식 |
+| --- | --- | --- |
+| Python 환경 | `/home/ubuntu/venv` | 팀 공용 |
+| 대회 데이터 | `/home/ubuntu/data/battery_data_light` | 팀 공용, 개인 폴더로 복사하지 않음 |
+| 운영진 원본 | `/home/ubuntu/data/baseline/uni_d_baseline_v7` | 팀 공용 원본 |
+| 실행 코드 | `/home/ubuntu/<본인이름>/unid_datathon_team18` | 각자 clone하고 본인 브랜치만 동기화 |
+| 실험 결과·예측·가중치 | 본인 레포 안의 `runs/`, `outputs/`, `weights/` | 개인별 저장, Git 제외 |
+
+**이 문서의 명령은 승범의 실행 예시입니다.** 다른 팀원은 명령·경로·tmux 세션 이름에 들어 있는 `seungbeom`을 모두 본인의 영문 폴더명으로 바꿉니다. 예를 들어 `minsu`라면 `/home/ubuntu/minsu`, `runs/minsu/...`, `outputs/minsu/...`, `train-minsu`를 사용합니다. `kim-seungbeom`이 포함된 **GitHub 주소는 팀 공용 주소이므로 바꾸지 않습니다.**
 
 ```bash
 mkdir -p /home/ubuntu/seungbeom
 cd /home/ubuntu/seungbeom
-git -c credential.helper= clone --branch initial-setup https://github.com/kim-seungbeom/unid_datathon_team18.git
+git -c credential.helper= clone --branch main https://github.com/kim-seungbeom/unid_datathon_team18.git
 cd unid_datathon_team18
 git branch --show-current
 ```
 
-마지막 출력은 `initial-setup`이어야 합니다. 같은 이름의 디렉터리가 이미 있으면 삭제하거나 덮어쓰지 말고 기존 레포와 미커밋 변경을 먼저 확인합니다.
+마지막 출력은 `main`이어야 합니다. 본인 이름 폴더는 이미 있어도 괜찮습니다. 그 안에 `unid_datathon_team18` 레포까지 있다면 다시 clone하지 말고 기존 레포와 미커밋 변경을 확인한 뒤 5절을 따릅니다. 다른 팀원의 폴더에서는 clone·pull·브랜치 변경을 하지 않습니다.
 
 인증이 필요한 레포라면 사용자가 직접 GitHub 인증을 처리합니다. HTTPS 비밀번호 입력칸에는 GitHub 계정 비밀번호 대신 해당 레포에 접근할 수 있는 토큰을 사용합니다. 위 명령의 `credential.helper=`는 이 clone에서 토큰 저장용 helper를 사용하지 않게 합니다. 토큰을 URL·문서·대화에 넣거나 공용 서버에 저장하지 않습니다.
 
 VS Code의 File → Open Folder에서 `/home/ubuntu/seungbeom/unid_datathon_team18`을 열면 실행할 파일을 볼 수 있습니다. 코드와 설정의 수정은 로컬에서 진행합니다.
+
+이후 명령은 모두 **본인 레포 루트**에서 실행합니다. 예를 들어 승범의 `weights/model.pt`는 `/home/ubuntu/seungbeom/unid_datathon_team18/weights/model.pt`이므로 다른 팀원의 같은 파일명과 충돌하지 않습니다. 같은 `ubuntu` 계정의 폴더 구분은 작업 충돌을 줄이기 위한 것이며 접근 권한을 분리하지는 않습니다.
 
 ## 2. 공용 환경 확인
 
@@ -38,7 +52,7 @@ bash scripts/setup_env.sh --server
 
 ## 3. 팀 모델 학습
 
-GPU를 사용하는 팀원이 없는지 확인합니다.
+개인 폴더를 나눠도 GPU는 공용입니다. 먼저 팀원과 사용 시간을 조율하고 현재 사용 상태를 확인합니다.
 
 ```bash
 nvidia-smi
@@ -91,7 +105,7 @@ python check_submission.py \
 
 ## 5. 로컬에서 수정한 코드를 다시 받기
 
-로컬에서 `initial-setup` 브랜치의 변경을 commit·push한 뒤, 실행 중인 작업이 없는 서버 레포에서:
+공통 코드는 로컬 작업 브랜치의 변경을 commit·push하고 PR로 `main`에 병합한 뒤 받습니다. 실행 중인 작업이 없는 **본인 서버 레포**에서 먼저 확인합니다.
 
 ```bash
 cd /home/ubuntu/seungbeom/unid_datathon_team18
@@ -99,13 +113,15 @@ git status --short --untracked-files=no
 git branch --show-current
 ```
 
-변경 파일이 없고 브랜치가 `initial-setup`이면 이어서:
+변경 파일이 없으면 아래 순서로 `main`을 받습니다. 기존에 `initial-setup`을 clone했던 경우도 이 명령으로 `main`에 전환하며 다시 clone할 필요가 없습니다. 로컬 `main` 브랜치가 없으면 `git switch main`이 원격 `origin/main`을 추적하는 브랜치를 만듭니다.
 
 ```bash
-git -c credential.helper= pull --ff-only origin initial-setup
+git -c credential.helper= fetch origin
+git switch main
+git -c credential.helper= pull --ff-only origin main
 ```
 
-서버에 소스 변경이 있거나 pull이 실패하면 강제로 덮어쓰지 않고 원인을 확인합니다. 이후 다른 기능 브랜치로 작업하면 로컬과 서버의 대상 브랜치를 함께 맞춥니다.
+서버에 소스 변경이 있거나 pull이 실패하면 강제로 덮어쓰지 않고 원인을 확인합니다. 이후 다른 기능 브랜치로 작업하면 로컬과 **본인 서버 레포**의 대상 브랜치를 함께 맞춥니다. 개인 폴더명과 브랜치명은 별개입니다. 예를 들어 `/home/ubuntu/seungbeom/unid_datathon_team18`에서 `feat/seungbeom-fusion` 브랜치를 실행할 수 있습니다.
 
 ## 운영진 원본 베이스라인 위치
 
