@@ -12,6 +12,31 @@ leaf 2는 재학습 재현 확인용이기도 하다. 기존 트리와 새 leaf 
 기존 모델과 약 0.89 제출 CSV는 수정하지 않는다. 오류가 나면 실패 폴더를 삭제하지 말고
 원인을 확인한 뒤 새 `--output_dir`로 실행한다.
 
+### `refitted_leaf2_probabilities: False`로 중단됐을 때
+
+집계 점수가 같아도 확률값이나 개별 예측은 다를 수 있다. 아직 수치 오차로 단정하지
+않는다. 아래 진단은 저장한 leaf 2와 원래 모델을 원래 Validation 캐시에서 비교하며,
+전처리/PCA 상태와 트리 구조·값의 차이도 요약한다. 재학습·이미지 추출·Test 접근은 없다.
+원래 캐시 파일의 해시를 확인하고 실패한 폴더는 읽기만 한다. 재현 검사는 해제하지 않는다.
+
+```bash
+LOKY_MAX_CPU_COUNT=4 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+python -u experiments/seungbeom/extratrees_leaf_audit.py \
+  --recipe runs/seungbeom/frozen_tree_blend_validation/recipe.json \
+  --failed_run runs/seungbeom/extratrees_leaf_sweep_seed42 \
+  --validation_csv /home/ubuntu/data/battery_data_light/validation/validation.csv \
+  --validation_embeddings runs/seungbeom/classwise_resnet18_seed42/embeddings/validation \
+  --output_dir runs/seungbeom/extratrees_leaf_audit_seed42 \
+  --device cuda \
+  2>&1 | tee runs/seungbeom/extratrees_leaf_audit_seed42.log
+```
+
+`Probability differences`의 `max_abs`와 `changed_tree_predictions`,
+`Preprocessing differences`, `Tree state differences`로 원인을 좁힌다.
+캐시의 집계 지표가 저장된 live-image 집계 지표와 같은지도 따로 표시한다. 캐시 진단이
+통과해도 모든 live-image 개별 확률의 동일성을 입증한 것은 아니다. 진단 파일은
+`audit.json`이며, 완료 recipe나 제출 CSV가 아니다. 이 결과를 확인한 뒤 복구 방법을 정한다.
+
 ## 1. 서버에서 코드 받기
 
 같은 clone에서 실행 중인 학습/추론이 끝난 후:
