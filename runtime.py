@@ -13,12 +13,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from sensor_features import DEFAULT_SENSOR_FEATURES, validate_feature_names
+from sensor_features import DEFAULT_SENSOR_FEATURES, validate_feature_names, validate_imputation
 
 ROOT = Path(__file__).resolve().parent
 SOURCE_FILES = (
     "schema.py",
     "sensor_features.py",
+    "temporal.py",
     "dataset.py",
     "preprocessing.py",
     "model.py",
@@ -37,6 +38,7 @@ def load_config(path: str | Path) -> dict:
     # Preserve existing raw-sensor multimodal configs.
     config.setdefault("mode", "multimodal")
     config.setdefault("sensor_features", list(DEFAULT_SENSOR_FEATURES))
+    config.setdefault("sensor_imputation", "median")
     positive_ints = ("image_size", "batch_size", "epochs", "sensor_hidden", "fusion_hidden")
     expected = set(positive_ints) | {
         "seed",
@@ -46,6 +48,7 @@ def load_config(path: str | Path) -> dict:
         "dropout",
         "mode",
         "sensor_features",
+        "sensor_imputation",
     }
     if set(config) != expected:
         raise ValueError("Config keys must match configs/baseline.json exactly.")
@@ -67,6 +70,7 @@ def load_config(path: str | Path) -> dict:
     if config["mode"] not in ("multimodal", "sensor_only"):
         raise ValueError("mode must be multimodal or sensor_only.")
     config["sensor_features"] = list(validate_feature_names(config["sensor_features"]))
+    validate_imputation(config["sensor_imputation"])
     return config
 
 

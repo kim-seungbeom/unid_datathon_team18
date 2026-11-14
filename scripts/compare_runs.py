@@ -27,6 +27,7 @@ def comparison_rows(run_dirs: list[Path]) -> list[dict]:
             {
                 "run": directory.name,
                 "mode": config.get("mode", "multimodal"),
+                "imputation": config.get("sensor_imputation", "median"),
                 "features": len(config["sensor_features"]) if "sensor_features" in config else 5,
                 "seed": config["seed"],
                 "best_epoch": metrics["epoch"],

@@ -12,7 +12,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 
+from preprocessing import SensorPreprocessor
 from schema import read_frame, validate_labels
 
 
@@ -38,13 +40,36 @@ def compare_predictions(reference: pd.DataFrame, candidate: pd.DataFrame) -> Non
         raise ValueError("Predictions changed for one or more of the same input samples.")
 
 
+def check_arbitrary_subset(reference, candidate, *, uses_history=False, diagnose_history=False):
+    try:
+        compare_predictions(reference, candidate)
+    except ValueError:
+        if not uses_history or not diagnose_history:
+            raise
+        print("DIAGNOSTIC: arbitrary subset changed after removing past observations.")
+        print("Confirm the organizer's partial-input contract before final submission.")
+        return False
+    print("PASS: arbitrary subset")
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data_dir", type=Path, required=True)
     parser.add_argument("--final", type=Path, required=True)
     parser.add_argument("--sample_submission", type=Path)
+    parser.add_argument(
+        "--checkpoint", type=Path, default=Path(__file__).resolve().parent / "weights/model.pt"
+    )
+    parser.add_argument(
+        "--diagnose_history_subset",
+        action="store_true",
+        help="Research only: report history-dependent subset differences without failing.",
+    )
     args = parser.parse_args()
     script = Path(__file__).resolve().parent / "test.py"
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    uses_history = SensorPreprocessor.from_dict(checkpoint["preprocessor"]).uses_history
     test_root = args.data_dir.resolve() / "test"
     frame = read_frame(test_root / "test.csv")
     for column in ("experiment_id", "relative_time_s"):
@@ -87,6 +112,8 @@ def main() -> None:
                     str(test_root),
                     "--output",
                     str(output_path),
+                    "--checkpoint",
+                    str(args.checkpoint.resolve()),
                 ],
                 capture_output=True,
                 text=True,
@@ -116,9 +143,16 @@ def main() -> None:
             prefixes.append(ordered.loc[ordered["relative_time_s"] <= cutoff])
         compare_predictions(original, run(pd.concat(prefixes, ignore_index=True)))
         print("PASS: future rows removed")
-        compare_predictions(original, run(frame.iloc[::2]))
-        print("PASS: arbitrary subset")
-    print("All consistency checks passed; accuracy and overall compliance are not certified.")
+        subset_same = check_arbitrary_subset(
+            original,
+            run(frame.iloc[::2]),
+            uses_history=uses_history,
+            diagnose_history=args.diagnose_history_subset,
+        )
+    if subset_same:
+        print("All consistency checks passed; accuracy and overall compliance are not certified.")
+    else:
+        print("Causal checks passed; arbitrary-subset invariance was NOT established.")
 
 
 if __name__ == "__main__":

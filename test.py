@@ -32,7 +32,7 @@ def main() -> None:
         parser.error("Checkpoint is missing. Supply --checkpoint or prepare weights/model.pt.")
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    if checkpoint.get("format_version") not in (1, 2) or checkpoint.get("label_values") != list(
+    if checkpoint.get("format_version") not in (1, 2, 3) or checkpoint.get("label_values") != list(
         LABELS
     ):
         raise ValueError("Unsupported checkpoint format or class mapping.")

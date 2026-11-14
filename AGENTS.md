@@ -1,6 +1,7 @@
 # Repository boundaries
 
 - For session continuity, read `docs/SESSION_HANDOFF.md` after these boundaries. It is a dated snapshot, not proof of a live SSH connection or completed push/training; verify local Git state and preserve uncommitted work. `docs/sensor_eda.md` describes a human-run server report, not authorization for agents to inspect real distributions.
+- The later causal-feature work is described in `docs/temporal_sensor_experiments.md`; it supersedes earlier current-row-only implementation notes. The user explicitly said not to merge: keep sensor work on `feat/seungbeom-sensor` and do not merge into main without a new request.
 
 - The user's chosen workflow is: edit code and run synthetic CPU checks in local macOS VS Code, commit/push code to the team GitHub repository, then have the user clone/pull the same branch on the GPU server and run it manually. Server repositories are execution copies, not the primary editing location. Keep this workflow unless the user explicitly changes it; do not recommend installing/signing into Codex on the shared server.
 - Each teammate keeps a separate server clone under `/home/ubuntu/<member>/unid_datathon_team18`, including their own run outputs and weights. `seungbeom` is one member's example, not a mandatory shared working directory. The team shares `/home/ubuntu/venv`, `/home/ubuntu/data`, and the GPU; do not duplicate data or rerun shared setup for each member. Personal folders under the same `ubuntu` account do not isolate permissions or credentials.
@@ -15,6 +16,6 @@
 - Do not expose credentials or raw remote URLs; do not change global Git identity or shared server packages.
 - Keep the required entry points `model.py`, `train.py`, and `test.py`. Preserve the submission CLI and output mapping to labels 1..6.
 - Learn preprocessing on the training split only. Test is inference-only. Do not use identifiers, filenames, labels, future observations, or whole-experiment summaries as features.
-- Until organizers clarify history versus partial-input invariance, use only current-row sensors and images.
+- The user supplied organizer OT rules explicitly allowing same-experiment current/past sensors, images, and time-window features, and requested causal forward fill and nonthermal features. Never use future observations, cross-experiment values, or full-experiment summaries. Preserve shuffle, experiment-isolation, and future-removal invariance; removal of required past rows can change history-dependent features and must be reported separately, not treated as proof that all temporal features are forbidden.
 - The user requested `initial-setup` for this initial setup, without a `codex/` prefix. Honor user-specified branch names and the team's documented branch conventions. Do not stage broadly, force-push, reset others' work, or publish without user authorization. Before committing, review the exact staged list and run `python scripts/check_staged.py`.
 - Verify meaningful changes with synthetic tests: `python -m pytest tests`. Use explicit code paths with Ruff. Never request real data, data screenshots, or data-bearing logs for debugging.
