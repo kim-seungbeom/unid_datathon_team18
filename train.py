@@ -59,19 +59,32 @@ def main() -> None:
         parser.error("model_out already exists. Choose a new path to preserve previous weights.")
 
     config = load_config(args.config)
+    use_images = config["mode"] == "multimodal"
+    if not use_images:
+        print(
+            "Sensor-only ablation: validation research only; final model must use both modalities."
+        )
     seed_everything(config["seed"])
     device = select_device(args.device)
-    train_frame = read_frame(args.train_csv, labeled=True)
-    val_frame = read_frame(args.val_csv, labeled=True)
+    train_frame = read_frame(args.train_csv, labeled=True, require_images=use_images)
+    val_frame = read_frame(args.val_csv, labeled=True, require_images=use_images)
     validate_split(train_frame, val_frame)
     args.run_dir.mkdir(parents=True, exist_ok=False)
-    preprocessor = SensorPreprocessor.fit(train_frame)
+    preprocessor = SensorPreprocessor.fit(train_frame, config["sensor_features"])
     model_config = {key: config[key] for key in ("sensor_hidden", "fusion_hidden", "dropout")}
+    model_config.update(sensor_input_dim=preprocessor.input_dim, mode=config["mode"])
     model = FusionClassifier(**model_config).to(device)
     train_data = BatteryDataset(
-        train_frame, train_image_root, preprocessor, config["image_size"], labeled=True
+        train_frame,
+        train_image_root,
+        preprocessor,
+        config["image_size"],
+        labeled=True,
+        use_images=use_images,
     )
-    val_data = BatteryDataset(val_frame, val_image_root, preprocessor, config["image_size"])
+    val_data = BatteryDataset(
+        val_frame, val_image_root, preprocessor, config["image_size"], use_images=use_images
+    )
     loader_options = {"batch_size": config["batch_size"], "num_workers": config["num_workers"]}
     train_loader = DataLoader(
         train_data,
@@ -98,7 +111,10 @@ def main() -> None:
             "shared_experiments_present": bool(
                 set(train_frame["experiment_id"]) & set(val_frame["experiment_id"])
             ),
-            "features": "current image and five current sensors only",
+            "mode": config["mode"],
+            "sensor_features": list(preprocessor.feature_names),
+            "uses_images": use_images,
+            "features": "current-row features only; no history, IDs, labels, or future rows",
         },
     )
     history = []
@@ -108,7 +124,8 @@ def main() -> None:
         total_loss = 0.0
         for batch in train_loader:
             optimizer.zero_grad(set_to_none=True)
-            logits = model(batch["images"].to(device), batch["sensors"].to(device))
+            images = batch["images"].to(device) if use_images else None
+            logits = model(images, batch["sensors"].to(device))
             loss = loss_function(logits, batch["targets"].to(device))
             if not torch.isfinite(loss):
                 raise ValueError("Training loss is nonfinite.")
@@ -125,7 +142,7 @@ def main() -> None:
         if metrics["macro_f1"] > best_score:
             best_score = metrics["macro_f1"]
             checkpoint = {
-                "format_version": 1,
+                "format_version": 2,
                 "state_dict": {
                     key: value.detach().cpu() for key, value in model.state_dict().items()
                 },

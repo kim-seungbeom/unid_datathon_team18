@@ -1,5 +1,7 @@
 {
   "seed": 42,
+  "mode": "multimodal",
+  "sensor_features": ["meas_v", "meas_a", "meas_t1", "meas_t2", "meas_p"],
   "image_size": 128,
   "batch_size": 32,
   "epochs": 10,

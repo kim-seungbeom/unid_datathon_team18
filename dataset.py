@@ -20,18 +20,28 @@ class BatteryDataset(Dataset):
         image_size: int,
         *,
         labeled: bool = False,
+        use_images: bool = True,
     ):
         self.frame = frame.reset_index(drop=True)
         self.image_root = Path(image_root).expanduser().resolve()
         self.sensors = preprocessor.transform(self.frame)
         self.image_size = image_size
         self.labeled = labeled
+        self.use_images = use_images
 
     def __len__(self) -> int:
         return len(self.frame)
 
     def __getitem__(self, index: int) -> dict:
         row = self.frame.iloc[index]
+        item = {"sensors": torch.from_numpy(self.sensors[index])}
+        if self.use_images:
+            item["images"] = self._load_image(row)
+        if self.labeled:
+            item["targets"] = torch.tensor(int(row["label"]) - 1, dtype=torch.long)
+        return item
+
+    def _load_image(self, row) -> torch.Tensor:
         image_path = (self.image_root / str(row["image_path"])).resolve()
         if not image_path.is_relative_to(self.image_root):
             raise ValueError("An image_path resolves outside --image_root.")
@@ -45,10 +55,4 @@ class BatteryDataset(Dataset):
                 (self.image_size, self.image_size), Image.Resampling.BILINEAR
             )
             values = np.asarray(image, dtype=np.float32) / 255.0
-        item = {
-            "images": torch.from_numpy(values.transpose(2, 0, 1).copy()),
-            "sensors": torch.from_numpy(self.sensors[index]),
-        }
-        if self.labeled:
-            item["targets"] = torch.tensor(int(row["label"]) - 1, dtype=torch.long)
-        return item
+        return torch.from_numpy(values.transpose(2, 0, 1).copy())

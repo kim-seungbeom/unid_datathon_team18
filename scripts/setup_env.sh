@@ -17,7 +17,7 @@ case "${1:---help}" in
   --server)
     PROJECT_PYTHON="${PROJECT_PYTHON:-/home/ubuntu/venv/bin/python}"
     PROJECT_DATA_ROOT="${PROJECT_DATA_ROOT:-/home/ubuntu/data/battery_data_light}"
-    PROJECT_BASELINE_ROOT="${PROJECT_BASELINE_ROOT:-/home/ubuntu/data/baseline/uni_d_baseline_v7}"
+    PROJECT_BASELINE_ROOT="${PROJECT_BASELINE_ROOT:-/home/ubuntu/data/baseline}"
     if [ ! -x "$PROJECT_PYTHON" ]; then
       echo 'Organizer Python environment not found.' >&2
       echo 'Ask whether a teammate finished the official setup.sh before running it yourself.' >&2
@@ -31,15 +31,17 @@ case "${1:---help}" in
         PROJECT_LAYOUT_READY=0
       fi
     done
-    if [ ! -d "$PROJECT_BASELINE_ROOT" ]; then
-      echo 'Organizer baseline directory not found.' >&2
-      PROJECT_LAYOUT_READY=0
-    fi
     if [ "$PROJECT_LAYOUT_READY" -ne 1 ]; then
       echo 'Check the official setup.sh status with your team. No data was downloaded or opened.' >&2
       exit 1
     fi
-    echo 'Expected shared data paths and baseline directory are present (contents not checked).'
+    echo 'Expected shared data paths are present (contents not checked).'
+    # The organizer archive can have different layouts; the team pipeline does not import it.
+    if [ -d "$PROJECT_BASELINE_ROOT" ]; then
+      echo 'Optional organizer baseline directory is present (contents not checked).'
+    else
+      echo 'Optional organizer baseline directory not found; it is not required by the team pipeline.'
+    fi
     "$PROJECT_PYTHON" scripts/check_environment.py --require_cuda
     echo 'Server check only: no packages were installed or changed.'
     ;;

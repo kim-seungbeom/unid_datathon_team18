@@ -23,7 +23,7 @@
 ├── venv/                              # 공용 Python 환경
 ├── data/
 │   ├── battery_data_light/             # 공용 데이터: 복제·원본 수정하지 않음
-│   └── baseline/uni_d_baseline_v7/     # 운영진 원본
+│   └── baseline/                      # 운영진 원본 배포 폴더
 ├── seungbeom/
 │   └── unid_datathon_team18/           # 승범이 로컬에서 push한 코드의 실행용 사본
 ├── member_a/
@@ -53,6 +53,7 @@ unid_datathon_team18/
 ├── train.py                           # 팀 학습 실행
 ├── test.py                            # 팀 제출용 추론
 ├── schema.py                          # 컬럼·라벨·분할 계약
+├── sensor_features.py                 # 센서 피처 정의·순서·버전
 ├── dataset.py                         # 공통 데이터 로더
 ├── preprocessing.py                   # 공통 전처리
 ├── evaluate.py                        # 공통 평가
@@ -86,24 +87,24 @@ unid_datathon_team18/
 - 수정 파일만 명시적으로 stage합니다. `git diff --cached --name-only`와 `python scripts/check_staged.py`를 확인합니다. 검사기는 알려진 경로·확장자를 검사하는 보조 수단이며 비밀값 검사나 접근 차단을 보장하지 않습니다.
 - 서버에 미커밋 변경이 있으면 먼저 보존하고 합칩니다. 강제 push·`reset --hard`는 사용하지 않습니다.
 
-## 담당 범위 예시
+## 담당 범위
 
-팀원 이름을 정해 실제 담당자를 합의합니다. 다음은 3명 협업을 위한 예시이며 확정 배정이 아닙니다.
+역할은 이미지 분석 / 센서 데이터 처리 / 두 결과 결합으로 나눕니다. 승범은 센서 데이터 처리를 담당하며 다른 두 담당자의 이름은 팀에서 정합니다.
 
 | 담당 | 주로 변경하는 파일 | 함께 맞출 계약 |
 | --- | --- | --- |
-| 데이터·전처리 | `schema.py`, `dataset.py`, `preprocessing.py` | 센서 순서, 이미지 크기, 타깃 변환, 분할 |
-| 모델·학습 | `model.py`, `train.py`, `configs/` | 모델 입력·출력, 체크포인트 형식 |
-| 검증·제출 | `evaluate.py`, `test.py`, `check_submission.py` | 지표, 저장된 전처리 사용, 부분 입력 재현 |
+| 이미지 분석 | `model.py`의 이미지 인코더, `dataset.py`의 이미지 변환 | 이미지 입력 규격·특징 차원 |
+| 센서 처리 — 승범 | `sensor_features.py`, `preprocessing.py`, 센서 실험 설정 | 피처 이름·순서·개수·버전, 전처리 저장·복원 |
+| 결합·통합 | `model.py`의 결합 부분, `train.py`, `evaluate.py`, `test.py`, `check_submission.py` | 두 입력 연결, 평가·가중치·제출 재현 |
 
-공통 인터페이스를 바꾸는 PR에는 영향을 받는 담당자의 확인을 받습니다. 개인 브랜치 예시는 `feat/seungbeom-fusion`, `feat/member-a-preprocess`, `feat/member-b-validation`입니다. 팀 공통 코드가 필요한 변경은 담당자 폴더에 숨기지 않고 해당 공통 모듈에서 관리합니다.
+`schema.py`와 `dataset.py`는 공용 연결 파일입니다. 공통 인터페이스를 바꾸는 PR에는 영향을 받는 담당자의 확인을 받습니다. 승범의 작업 브랜치는 `feat/seungbeom-sensor`입니다. 센서 단독 기준 성능과 파생 피처 효과 비교도 센서 담당 업무에 포함하며, 최종 모델에서는 이미지와 센서를 모두 사용합니다. 자세한 절차는 [센서 실험 안내](docs/sensor_experiments.md)를 따릅니다.
 
 ## 코드와 인터페이스
 
 - Python 3.10 이상 문법, 들여쓰기 4칸, 100자 줄 길이를 사용합니다. 로컬 검증 환경은 Python 3.12로 만듭니다.
 - 함수·변수·파일: `snake_case`, 클래스: `PascalCase`, 상수: `UPPER_SNAKE_CASE`.
-- 모델 계약: `model(images[B,3,H,W], sensors[B,5]) -> logits[B,6]`.
-- 센서 순서: `meas_v`, `meas_a`, `meas_t1`, `meas_t2`, `meas_p`.
+- 모델 계약: `model(images[B,3,H,W], sensors[B,F]) -> logits[B,6]`. 센서 단독 모드의 이미지는 `None`이며 `F`는 저장된 피처 목록 길이입니다.
+- 원본 센서 순서는 `meas_v`, `meas_a`, `meas_t1`, `meas_t2`, `meas_p`입니다. 모델 입력 순서는 설정의 `sensor_features`에 지정하고 체크포인트에 저장합니다.
 - 타깃은 내부에서 `0..5`, CSV 제출 시 `1..6`입니다.
 - 경로는 CLI, 모델·학습 설정은 `configs/*.json`으로 전달합니다. 저장된 전처리와 클래스 매핑을 추론에서 그대로 사용합니다.
 - 식별자·실험 ID·파일명은 모델 특징으로 넣지 않습니다. 현재 구현은 시간 정보나 과거 행을 사용하지 않습니다.

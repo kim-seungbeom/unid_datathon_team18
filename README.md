@@ -10,6 +10,7 @@
 - `.gitignore`와 `AGENTS.md`는 파일 접근을 기술적으로 차단하지 않습니다. AI를 사용하는 작업 공간에는 코드만 두고, 실제 데이터는 서버의 공용 경로에서 사용하세요. 현재 `open/`의 데이터는 AI가 읽지 않는 대상으로 취급합니다.
 - AI가 확인한 것은 사용자가 지정한 베이스라인 `.py`·README·requirements와 공식 설명 문서입니다. 실제 CSV·이미지·노트북 출력·학습 로그는 확인하지 않았습니다.
 - 맥에서는 임의로 생성한 가상 입력의 CPU 검증만 합니다. 대회 데이터 학습·추론은 사용자가 주최 측 서버에서 직접 실행합니다. 결과 로그·예측·가중치도 AI 대화에 올리지 마세요.
+- 터미널 출력은 내용으로 구분합니다. 데이터가 없는 코드 오류·패키지 버전·GPU 환경 정보와 가상 입력 결과는 공유할 수 있습니다. 실제 데이터의 분포·결측률 등 집계 결과 공유는 운영진의 별도 허용이 확인되지 않았으므로 서버에서 직접 확인합니다.
 
 ## 파일 구성
 
@@ -20,8 +21,10 @@
 | `test.py` | 저장된 모델로 입력 행만 예측하여 제출 CSV 생성 |
 | `schema.py`, `dataset.py` | 컬럼 검사, split 기준 이미지 로딩, 라벨 변환 |
 | `preprocessing.py` | Train에서만 학습하는 센서 결측 대체·정규화 |
+| `sensor_features.py` | 원본 컬럼과 분리된 현재 행 기반 센서 피처 생성·이름 검증 |
 | `evaluate.py`, `runtime.py` | 6클래스 평가, 재현 설정, 메타데이터 기록 |
 | `configs/baseline.json` | 모델·학습 설정 |
+| `configs/sensor_*.json`, `configs/fusion_temperature.json` | 센서 단독 및 온도 파생 피처 비교 설정 |
 | `check_submission.py` | 팀 자체 제출 재현·부분 입력 검사 도구 |
 | `scripts/` | 로컬 환경 설치, 서버 환경 확인, staged 파일 검사 |
 | `tests/` | 대회 데이터와 무관한 가상 입력 검증 |
@@ -29,6 +32,10 @@
 | `baselines/organizer_v7/` | 비교용 운영진 원본 코드 5개. 데이터·노트북·실행 결과 제외 |
 | `docs/rules_review.md` | 공식 안내 대조 결과와 아직 확인하지 않은 항목 |
 | `docs/server_quickstart.md` | `main` 브랜치를 개인 서버 폴더에 받아 학습·추론하는 순서 |
+| `docs/sensor_experiments.md` | 센서 담당의 피처 확장·단독 실험·서버 비교 순서 |
+| `scripts/compare_runs.py` | 동일 Train·Validation을 사용한 실험의 검증 지표 비교 |
+| `scripts/sensor_eda.py`, `docs/sensor_eda.md` | 사용자가 서버에서 확인하는 센서 분포 요약·그래프 |
+| `docs/SESSION_HANDOFF.md` | 다른 세션에 전달할 파일 구조·서버 상태·진행 단계 |
 
 ## 시작 순서: 주최 측 GPU 서버 가이드 기준
 
@@ -47,7 +54,7 @@
 ```bash
 test -x /home/ubuntu/venv/bin/python && echo "공용 Python: 있음" || echo "공용 Python: 확인 필요"
 test -d /home/ubuntu/data/battery_data_light && echo "공용 데이터 폴더: 있음" || echo "공용 데이터 폴더: 확인 필요"
-test -d /home/ubuntu/data/baseline/uni_d_baseline_v7 && echo "베이스라인 폴더: 있음" || echo "베이스라인 폴더: 확인 필요"
+test -d /home/ubuntu/data/baseline && echo "베이스라인 배포 폴더: 있음" || echo "베이스라인 배포 폴더: 없음 (팀 모델 실행에는 불필요)"
 ```
 
 폴더가 있어도 압축 해제와 설치가 끝났는지는 별개입니다. 팀에서 공식 `setup.sh`를 실행한 사람에게 완료 여부를 확인하세요. 작업 중이면 중복 실행하지 않습니다.
@@ -95,8 +102,8 @@ python -m pytest tests
 코드 스타일 검사도 데이터 폴더를 탐색하지 않도록 코드 경로를 명시합니다.
 
 ```bash
-python -m ruff check schema.py dataset.py preprocessing.py model.py evaluate.py runtime.py train.py test.py check_submission.py scripts tests
-python -m ruff format --check schema.py dataset.py preprocessing.py model.py evaluate.py runtime.py train.py test.py check_submission.py scripts tests
+python -m ruff check schema.py sensor_features.py dataset.py preprocessing.py model.py evaluate.py runtime.py train.py test.py check_submission.py scripts tests
+python -m ruff format --check schema.py sensor_features.py dataset.py preprocessing.py model.py evaluate.py runtime.py train.py test.py check_submission.py scripts tests
 ```
 
 ## GPU 서버 환경 확인
@@ -111,7 +118,7 @@ bash scripts/setup_env.sh --server
 nvidia-smi
 ```
 
-`--server`는 각 split의 CSV·이미지 폴더와 베이스라인 폴더 존재 여부, 패키지·CUDA를 확인만 합니다. 파일 내용을 읽거나 데이터 다운로드·설치·업그레이드를 수행하지 않습니다. 경로 존재 검사는 데이터 전체의 완전성을 보장하지 않습니다. 공용 환경에 NumPy·pandas·Pillow가 없을 때만 팀과 합의한 뒤 `python -m pip install -r requirements-common.txt`를 실행하세요. 이미 설치된 GPU용 PyTorch는 교체하지 않습니다. 제출 가이드에 맞춰 `requirements.txt`의 `torch`에는 버전을 붙이지 않고, 실행 시 실제 버전을 별도로 기록합니다. 코드의 최소 환경은 Python 3.10, PyTorch 2.7입니다.
+`--server`는 각 split의 CSV·이미지 폴더, 패키지·CUDA를 확인만 합니다. 운영진 베이스라인 배포 폴더는 참고용으로 확인하며 없어도 팀 모델의 환경 검사를 중단하지 않습니다. 압축 내부의 특정 폴더 이름은 가정하지 않습니다. 파일 내용을 읽거나 데이터 다운로드·설치·업그레이드를 수행하지 않습니다. 경로 존재 검사는 데이터 전체의 완전성을 보장하지 않습니다. 공용 환경에 NumPy·pandas·Pillow가 없을 때만 팀과 합의한 뒤 `python -m pip install -r requirements-common.txt`를 실행하세요. 이미 설치된 GPU용 PyTorch는 교체하지 않습니다. 제출 가이드에 맞춰 `requirements.txt`의 `torch`에는 버전을 붙이지 않고, 실행 시 실제 버전을 별도로 기록합니다. 코드의 최소 환경은 Python 3.10, PyTorch 2.7입니다.
 
 주최 측 공용 환경은 `/home/ubuntu/venv`, 공식 데이터 기준 경로는 `/home/ubuntu/data/battery_data_light`입니다. 실제 설치 여부는 서버에서 확인해야 합니다. `sudo apt upgrade`는 실행하지 않습니다.
 
@@ -172,19 +179,23 @@ python check_submission.py \
 ## 모델·검증 설계
 
 - **이미지:** 공식 설명의 RGB 의사색 PNG를 고정 크기 128×128로 변환하고 픽셀을 255로 나눕니다. CNN이 시각 특징을 학습합니다. 색을 물리적인 온도로 환산하지 않습니다. 학습·추론에 무작위 이미지 증강을 사용하지 않습니다.
-- **센서:** 베이스라인과 같은 `meas_v`, `meas_a`, `meas_t1`, `meas_t2`, `meas_p` 순서입니다. 추가 가스 센서·실험 조건·`relative_time_s`는 현재 시작 모델에 넣지 않았습니다.
-- **전처리:** 학습 분할의 센서 중앙값으로 결측·비유한값을 대체하고, 학습 평균·표준편차로 정규화합니다. 모두 결측인 열은 0, 상수 열의 스케일은 1로 처리합니다. 저장한 값을 Validation·Test에 그대로 적용합니다.
-- **결합:** 이미지 특징과 센서 MLP 출력을 연결한 뒤 6개 logits를 출력합니다. 내부 타깃은 `0..5`, 제출 때만 `1..6`으로 변환합니다.
+- **센서:** 원본 CSV 계약 `RAW_SENSOR_COLUMNS`는 `meas_v`, `meas_a`, `meas_t1`, `meas_t2`, `meas_p`입니다. 모델 입력은 설정의 `sensor_features`로 따로 지정합니다. 기본은 원본 5개이고, 온도 평균·차이·절댓값 차이를 추가한 8개 피처 비교 설정도 제공합니다. 실제 추가 컬럼을 자동으로 입력에 넣지 않습니다.
+- **전처리:** 현재 행의 파생 피처를 계산한 뒤 학습 분할의 각 피처 중앙값으로 결측·비유한값을 대체하고, 학습 평균·표준편차로 정규화합니다. 모두 결측인 열은 0, 상수 열의 스케일은 1로 처리합니다. 피처 이름·순서·버전과 통계를 저장하여 Validation·Test에 그대로 적용합니다.
+- **결합:** 기본 `mode=multimodal`은 이미지 특징과 센서 MLP 출력을 연결한 뒤 6개 logits를 출력합니다. `mode=sensor_only`는 이미지를 읽지 않는 센서 분석용 비교 실험이며 최종 제출 모델로 사용하지 않습니다. 내부 타깃은 `0..5`, 제출 때만 `1..6`으로 변환합니다.
 - **검증:** Train만 모델·전처리를 학습하고 제공 Validation의 6클래스 Macro F1으로 최적 epoch를 선택합니다. 두 분할의 sample ID·experiment ID 중복은 오류로 처리합니다. 자체 CV와 Train+Validation 최종 재학습은 현재 구현하지 않았습니다.
 - **시계열:** 현재 행만 사용합니다. 과거 이력·미래 관측·실험 전체 통계·다른 실험 관측은 사용하지 않습니다. 식별자와 파일명은 모델 입력이 아닙니다.
 - **추론 일관성:** `eval()`, inference mode, 시드 및 결정적 연산 설정을 사용합니다. 모델 forward는 한 샘플씩 수행하므로 `--batch_size`는 로딩에만 적용됩니다. 처리 속도보다 부분 입력·배치 구성 일관성을 우선한 초기 구현입니다.
 - **사전학습:** 사용하지 않습니다. 외부 데이터나 외부 추론 API도 사용하지 않습니다.
 
+센서 담당의 실행 명령과 피처 확장 방법은 [센서 실험 안내](docs/sensor_experiments.md)를 따릅니다. 새 가중치는 입력 차원·모드와 피처 정보를 포함하는 v2로 저장하고, 기존 원본 센서 5개 기반 v1 가중치도 읽습니다. 제출 코드에는 `sensor_features.py`를 함께 포함해야 합니다.
+
 CPU와 CUDA, 서로 다른 버전·장치 간 결과까지 동일하다고 보장할 수는 없습니다. 최종 가중치와 함께 실제 서버 환경을 기록하고 동일 환경에서 최종 파일 재현 검사를 수행하세요. [PyTorch 재현성 안내](https://docs.pytorch.org/docs/2.7/notes/randomness.html)를 기준으로 난수와 결정적 연산을 설정했습니다.
 
 ## 로컬 검증 기록
 
-2026-11-14 KST, macOS arm64 / Python 3.12.13 / PyTorch 2.15.0 / NumPy 2.5.4 / pandas 3.1.1 / Pillow 12.3.0에서 가상 입력 CPU 테스트 13개와 Ruff 검사·포맷 검사를 통과했습니다. 가상 학습 → 가중치 저장 → 필수 인자 세 개의 추론 → 제출 일관성 점검을 포함합니다. 이 버전 기록은 로컬 검증 환경이며, 주최 측 서버의 환경이나 실제 대회 성능을 나타내지 않습니다.
+2026-11-14 KST, macOS arm64 / Python 3.12.13 / PyTorch 2.15.0 / NumPy 2.5.4 / pandas 3.1.1 / Pillow 12.3.0의 로컬 환경에서 초기 가상 입력 CPU 테스트 13개를 통과했습니다. 센서 피처 확장 후에는 CPU 테스트 31개와 Ruff 검사·포맷 검사를 통과했습니다. 원본·파생 피처 각각의 센서 단독 및 멀티모달 학습 → 가중치 복원 → 추론, 부분 입력 일관성, 기존 v1 가중치 호환, Train·Validation이 다른 실험의 비교 거부를 확인했습니다. 이 기록은 주최 측 서버의 환경이나 실제 대회 성능을 나타내지 않습니다.
+
+센서 분포 보고서 추가 후에는 가상 CPU 테스트 35개를 통과했습니다. 로컬에 Matplotlib 3.11.2를 설치하여 가상 입력의 PNG·HTML 생성, 결측·상수 분포, 기존 보고서 덮어쓰기 방지와 Test 분석 거부를 확인했습니다. Matplotlib은 `requirements-eda.txt`의 선택 의존성이며 서버 환경을 자동으로 바꾸지 않습니다.
 
 ## 최종 제출 전에 채울 정보
 

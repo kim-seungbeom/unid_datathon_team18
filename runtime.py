@@ -13,9 +13,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from sensor_features import DEFAULT_SENSOR_FEATURES, validate_feature_names
+
 ROOT = Path(__file__).resolve().parent
 SOURCE_FILES = (
     "schema.py",
+    "sensor_features.py",
     "dataset.py",
     "preprocessing.py",
     "model.py",
@@ -29,6 +32,11 @@ SOURCE_FILES = (
 def load_config(path: str | Path) -> dict:
     with Path(path).open(encoding="utf-8") as handle:
         config = json.load(handle)
+    if not isinstance(config, dict):
+        raise ValueError("Config must be a JSON object.")
+    # Preserve existing raw-sensor multimodal configs.
+    config.setdefault("mode", "multimodal")
+    config.setdefault("sensor_features", list(DEFAULT_SENSOR_FEATURES))
     positive_ints = ("image_size", "batch_size", "epochs", "sensor_hidden", "fusion_hidden")
     expected = set(positive_ints) | {
         "seed",
@@ -36,6 +44,8 @@ def load_config(path: str | Path) -> dict:
         "weight_decay",
         "num_workers",
         "dropout",
+        "mode",
+        "sensor_features",
     }
     if set(config) != expected:
         raise ValueError("Config keys must match configs/baseline.json exactly.")
@@ -54,6 +64,9 @@ def load_config(path: str | Path) -> dict:
         raise ValueError("Invalid learning rate or weight decay.")
     if not 0 <= config["dropout"] < 1:
         raise ValueError("dropout must be in [0, 1).")
+    if config["mode"] not in ("multimodal", "sensor_only"):
+        raise ValueError("mode must be multimodal or sensor_only.")
+    config["sensor_features"] = list(validate_feature_names(config["sensor_features"]))
     return config
 
 
@@ -86,8 +99,8 @@ def predict_labels(model, loader, device: torch.device) -> np.ndarray:
     for batch in loader:
         # A fixed single-row forward pass avoids batch-size dependent floating-point paths.
         # batch_size controls image loading only. Optimize only after invariance tests pass.
-        for index in range(len(batch["images"])):
-            images = batch["images"][index : index + 1].to(device)
+        for index in range(len(batch["sensors"])):
+            images = batch["images"][index : index + 1].to(device) if "images" in batch else None
             sensors = batch["sensors"][index : index + 1].to(device)
             logits = model(images, sensors)
             if not torch.isfinite(logits).all():

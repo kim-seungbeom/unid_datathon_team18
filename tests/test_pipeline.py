@@ -20,6 +20,7 @@ from preprocessing import SensorPreprocessor
 from runtime import ROOT, SOURCE_FILES
 from schema import SENSOR_COLUMNS, read_frame, validate_labels, validate_split
 from scripts.check_staged import blocked_path
+from sensor_features import TEMPERATURE_SENSOR_FEATURES
 
 
 def synthetic_frame(count: int = 6) -> pd.DataFrame:
@@ -127,7 +128,9 @@ def test_submission_checker_rejects_changed_predictions_and_float_labels(tmp_pat
         read_submission(path, ["00001", "NA"])
 
 
-def test_synthetic_training_and_submission_contract(tmp_path):
+@pytest.mark.parametrize("mode", ["multimodal", "sensor_only"])
+@pytest.mark.parametrize("derived", [False, True])
+def test_synthetic_training_and_submission_contract(tmp_path, mode, derived):
     # Reproduce the documented split-relative image paths without using any actual data.
     generator = np.random.default_rng(1234)
     data_root = tmp_path / "synthetic_data"
@@ -139,9 +142,12 @@ def test_synthetic_training_and_submission_contract(tmp_path):
         if split == "test":
             frame["sample_id"] = ["00001", "NA", "00003", "00004", "00005", "00006"]
         frame["experiment_id"] = [f"{split}_group_{i // 3}" for i in range(count)]
-        for relative_path in frame["image_path"]:
-            pixels = generator.integers(0, 256, (20, 24, 3), dtype=np.uint8)
-            Image.fromarray(pixels).save(folder / relative_path)
+        if mode == "multimodal":
+            for relative_path in frame["image_path"]:
+                pixels = generator.integers(0, 256, (20, 24, 3), dtype=np.uint8)
+                Image.fromarray(pixels).save(folder / relative_path)
+        else:
+            frame = frame.drop(columns=["image_path"])
         if split == "test":
             frame = frame.drop(columns=["label"])
         frame.to_csv(folder / f"{split}.csv", index=False)
@@ -150,6 +156,9 @@ def test_synthetic_training_and_submission_contract(tmp_path):
 
     config = json.loads((ROOT / "configs/baseline.json").read_text())
     config.update(image_size=16, epochs=1, batch_size=6, sensor_hidden=8, fusion_hidden=8)
+    config["mode"] = mode
+    if derived:
+        config["sensor_features"] = list(TEMPERATURE_SENSOR_FEATURES)
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(config))
     # A code-only temporary submission package tests the exact three-argument CLI.
@@ -188,6 +197,10 @@ def test_synthetic_training_and_submission_contract(tmp_path):
     )
     for name in ("best.pt", "config.json", "preprocessing.json", "environment.json", "split.json"):
         assert (run_dir / name).is_file()
+    saved = torch.load(weights, weights_only=True, map_location="cpu")
+    assert saved["model_config"]["sensor_input_dim"] == (8 if derived else 5)
+    assert saved["model_config"]["mode"] == mode
+    assert saved["preprocessor"]["feature_names"] == config["sensor_features"]
     original = tmp_path / "original.csv"
     command(
         "test.py",
@@ -219,5 +232,45 @@ def test_synthetic_training_and_submission_contract(tmp_path):
         "1",
     )
     compare_predictions(expected, read_submission(modified_output, frame["sample_id"].tolist()))
-    report = command("check_submission.py", "--data_dir", data_root, "--final", original)
-    assert report.count("PASS:") == 6
+    subset = modified.iloc[[4, 0, 2]]
+    subset_path = tmp_path / "subset.csv"
+    subset.to_csv(subset_path, index=False)
+    subset_output = tmp_path / "subset_output.csv"
+    command(
+        "test.py",
+        "--input",
+        subset_path,
+        "--image_root",
+        data_root / "test",
+        "--output",
+        subset_output,
+        "--batch_size",
+        "2",
+    )
+    compare_predictions(expected, read_submission(subset_output, subset["sample_id"].tolist()))
+    if mode == "multimodal" and not derived:
+        report = command("check_submission.py", "--data_dir", data_root, "--final", original)
+        assert report.count("PASS:") == 6
+        # The v1 checkpoint contract must still reproduce the same baseline predictions.
+        saved["format_version"] = 1
+        saved["model_config"].pop("sensor_input_dim")
+        saved["model_config"].pop("mode")
+        saved["preprocessor"] = {
+            "sensor_columns": list(SENSOR_COLUMNS),
+            **{key: saved["preprocessor"][key] for key in ("medians", "means", "scales")},
+        }
+        legacy = tmp_path / "legacy.pt"
+        torch.save(saved, legacy)
+        legacy_output = tmp_path / "legacy_output.csv"
+        command(
+            "test.py",
+            "--input",
+            data_root / "test/test.csv",
+            "--image_root",
+            data_root / "test",
+            "--output",
+            legacy_output,
+            "--checkpoint",
+            legacy,
+        )
+        compare_predictions(expected, read_submission(legacy_output, frame["sample_id"].tolist()))

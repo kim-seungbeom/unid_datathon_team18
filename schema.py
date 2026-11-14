@@ -5,18 +5,24 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-SENSOR_COLUMNS = ("meas_v", "meas_a", "meas_t1", "meas_t2", "meas_p")
+RAW_SENSOR_COLUMNS = ("meas_v", "meas_a", "meas_t1", "meas_t2", "meas_p")
+# Compatibility for callers of the original starter; these are CSV columns, not model features.
+SENSOR_COLUMNS = RAW_SENSOR_COLUMNS
 LABELS = (1, 2, 3, 4, 5, 6)
 
 
-def read_frame(path: str | Path, *, labeled: bool = False) -> pd.DataFrame:
+def read_frame(
+    path: str | Path, *, labeled: bool = False, require_images: bool = True
+) -> pd.DataFrame:
     # Preserve IDs such as 00001 and NA exactly as strings.
     frame = pd.read_csv(
         path,
         dtype={"sample_id": str, "image_path": str, "experiment_id": str},
         keep_default_na=False,
     )
-    required = {"sample_id", "image_path", *SENSOR_COLUMNS}
+    required = {"sample_id", *RAW_SENSOR_COLUMNS}
+    if require_images:
+        required.add("image_path")
     if labeled:
         required.add("label")
     missing = sorted(required - set(frame.columns))
@@ -24,7 +30,7 @@ def read_frame(path: str | Path, *, labeled: bool = False) -> pd.DataFrame:
         raise ValueError(f"Missing required columns: {', '.join(missing)}")
     if frame.empty:
         raise ValueError("Input CSV must contain at least one row.")
-    for column in ("sample_id", "image_path"):
+    for column in ("sample_id", "image_path") if require_images else ("sample_id",):
         if frame[column].str.strip().eq("").any():
             raise ValueError(f"Column {column} contains empty values.")
     if frame["sample_id"].duplicated().any():
