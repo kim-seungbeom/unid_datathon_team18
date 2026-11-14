@@ -134,6 +134,59 @@ PY
 | `encoders` | 작은 CNN / ResNet18을 사전학습 없이 학습 | 2 |
 | `imbalance` | 일반 CE / 가중 CE, 선택적으로 `--include_focal` | 2 또는 3 |
 | `seeds` | 동일 후보를 seed 42, 43, 44로 반복 | 기본 3 |
+| `temporal` | 원본 / 전압 30초 / 압력 30초 / 온도 변화율 / 결합 | 5 |
+
+### 현재 진행: 최고 concat 모델에 시간 피처 추가
+
+이미 완료한 concat 실행의 `config.json`을 기준으로 **센서 피처만** 바꿉니다.
+같은 코드·seed의 원본 대조군도 새 폴더에서 다시 학습합니다. 이미지 벡터는 기존 캐시를
+재사용하므로 인코더 추출을 반복하지 않습니다. 다섯 실험은 자동으로 순차 실행됩니다.
+
+```bash
+python experiments/seungbeom/neural_sweep.py plan \
+  --stage temporal --max_trials 5 \
+  --base_config runs/seungbeom/neural_fusion_seed42/embedding_concat_s42_3daac9bb72d0ba69/config.json \
+  --output runs/seungbeom/neural_plans/temporal_seed42.json
+
+python -u experiments/seungbeom/neural_sweep.py run \
+  --plan runs/seungbeom/neural_plans/temporal_seed42.json \
+  --data_dir /home/ubuntu/data/battery_data_light \
+  --run_root runs/seungbeom/neural_temporal_seed42 \
+  --train_embeddings runs/seungbeom/classwise_resnet18_seed42/embeddings/train \
+  --val_embeddings runs/seungbeom/classwise_resnet18_seed42/embeddings/validation \
+  --device cuda
+
+python experiments/seungbeom/neural_sweep.py compare \
+  --plan runs/seungbeom/neural_plans/temporal_seed42.json \
+  --run_root runs/seungbeom/neural_temporal_seed42 \
+  --compact --class_details
+```
+
+| `sensors` 표시 | 센서 입력 수 | 원본 5개에 추가하는 값 |
+| --- | --- | --- |
+| `raw` | 5 | 없음 |
+| `voltage30` | 7 | `meas_v_mean30s`, `meas_v_delta30s` |
+| `pressure30` | 7 | `meas_p_mean30s`, `meas_p_delta30s` |
+| `temperature30` | 7 | `meas_t1_slope30s`, `meas_t2_slope30s` |
+| `combined30` | 11 | 위 여섯 피처 모두 |
+
+전압·압력 평균은 같은 실험의 `(t-30초, t]` 실제 유효 관측 평균입니다.
+변화량은 현재값에서 `t-30초` 이하의 가장 최근 유효값을 뺍니다. 기준값이 30초보다 오래된
+관측일 수 있으므로 초당 변화율로 부르지 않습니다. 온도 기울기는 `(t-30초, t]`의
+유효 온도와 실제 초 단위 시간으로 최소제곱 직선을 맞춘 기울기(℃/초)입니다.
+관측이 두 개 미만이면 결측으로 둡니다. 같은 실험의 중복 시각은 오류로 처리합니다.
+
+부족한 이력으로 생긴 결측은 Train에서 계산한 피처별 중앙값으로 대체합니다
+(Train에서 전부 결측인 피처만 0). Train 평균·표준편차로 표준화하고 Validation·Test에는
+저장된 값을 적용합니다. 이력 계산은 배치·shuffle 전에 입력 CSV 전체에서 수행합니다.
+미래값, 다른 실험, 실험 전체 요약, 식별자·정답 파생값은 모델 입력에 쓰지 않습니다.
+호출 사이에 이력을 저장하거나 다른 CSV에서 가져오지 않습니다.
+
+이 단계는 **Validation 비교용**입니다. 행 순서 변경·실험 분리·미래 제거에는 동일하지만,
+필요한 과거 행을 임의로 삭제하면 피처와 예측이 달라질 수 있습니다. OT의 과거 이력 허용과
+제출 안내의 임의 부분 입력 조건의 적용 방식은 별도 확인이 필요하며, 이 실험의 완료를
+최종 제출 적합 판정으로 기록하지 않습니다. 결과를 보고 개선 후보만 추가 seed로 비교합니다.
+기존 원본 concat 가중치와 제출 CSV는 유지합니다.
 
 `encoders`는 동일 해상도·현재 행 센서·concat 조건의 구조 비교입니다. 공개 사전학습 벡터를
 쓰는 첫 실험과는 사전학습 여부 및 입력 전처리가 다르므로 인코더 하나만의 효과로 해석하지

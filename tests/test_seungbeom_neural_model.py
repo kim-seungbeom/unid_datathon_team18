@@ -167,7 +167,6 @@ def test_config_defaults_and_model_mapping_are_independent(tmp_path):
         {"class_weight_power": 1.1},
         {"image_size": 8},
         {"sensor_features": ["label"]},
-        {"sensor_features": ["meas_v", "meas_v_mean30s"]},
         {"sensor_imputation": "forward_fill"},
         {"sensor_scaling": "robust"},
         {"embedding_dim": 384},

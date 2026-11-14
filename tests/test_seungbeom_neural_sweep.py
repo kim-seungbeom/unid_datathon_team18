@@ -42,7 +42,14 @@ def test_plan_is_bounded_full_deterministic_and_deduplicated():
 
 @pytest.mark.parametrize(
     "stage, expected",
-    [("lr", 3), ("regularization", 4), ("encoders", 2), ("imbalance", 2), ("seeds", 3)],
+    [
+        ("lr", 3),
+        ("regularization", 4),
+        ("encoders", 2),
+        ("imbalance", 2),
+        ("seeds", 3),
+        ("temporal", 5),
+    ],
 )
 def test_stages_change_only_declared_factors(stage, expected):
     plan = sweep.create_plan([{}], stage)
@@ -52,6 +59,35 @@ def test_stages_change_only_declared_factors(stage, expected):
             assert trial["config"]["encoder"] in ("small_cnn", "resnet18")
             assert trial["config"]["fusion"] == "concat"
         assert trial["config"]["epochs"] == 50
+
+
+def test_temporal_stage_changes_only_sensor_features_and_has_a_raw_control():
+    from experiments.seungbeom.neural_sensors import TEMPORAL_VARIANTS
+
+    plan = sweep.create_plan([{"learning_rate": 0.0003, "seed": 44}], "temporal", max_trials=5)
+    assert [tuple(trial["config"]["sensor_features"]) for trial in plan["trials"]] == list(
+        TEMPORAL_VARIANTS.values()
+    )
+    for trial in plan["trials"]:
+        assert set(trial["changes"]) <= {"sensor_features"}
+        assert trial["config"]["learning_rate"] == 0.0003
+        assert trial["config"]["seed"] == 44
+    sweep.validate_plan(plan)
+
+
+def test_compact_compare_shows_class_scores_without_json(tmp_path, capsys):
+    directory = synthetic_run(tmp_path, "raw_control", 42, 0.5)
+    sweep.write_json(
+        directory / "best_metrics.json",
+        {
+            "macro_f1": 0.5,
+            "class_f1": {str(label): 0.5 for label in range(1, 7)},
+        },
+    )
+    sweep.main(["compare", str(directory), "--compact", "--class_details"])
+    text = capsys.readouterr().out
+    assert "f1_1" in text and "f1_6" in text and "\traw\t" in text
+    assert "groups" not in text
 
 
 def test_plan_rejects_duplicate_seeds_mutation_and_path_traversal():

@@ -16,8 +16,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from experiments.seungbeom.neural_config import load_config, normalize_config  # noqa: E402
+from experiments.seungbeom.neural_sensors import TEMPORAL_VARIANTS, sensor_variant  # noqa: E402
 
-STAGES = ("lr", "regularization", "fusion", "encoders", "imbalance", "seeds")
+STAGES = ("lr", "regularization", "fusion", "encoders", "imbalance", "seeds", "temporal")
 
 
 def canonical(value) -> str:
@@ -42,6 +43,8 @@ def write_json(path, value, *, exclusive=False):
 
 
 def _variations(stage, seeds, include_focal):
+    if stage == "temporal":
+        return [{"sensor_features": list(names)} for names in TEMPORAL_VARIANTS.values()]
     if stage == "lr":
         return [{"learning_rate": rate} for rate in (1e-4, 3e-4, 1e-3)]
     if stage == "regularization":
@@ -395,14 +398,39 @@ def compare_command(args):
                 raise ValueError("Run config differs from the planned trial.")
             directories.append(directory)
     result = summarize(directories, args.require_seeds, args.paired)
-    print("variant\tseeds\tn\tmacro_f1_mean\tmacro_f1_std")
+    compact = getattr(args, "compact", False)
+    class_details = getattr(args, "class_details", False)
+    header = "variant\tseeds\tn\tmacro_f1_mean\tmacro_f1_std"
+    if compact:
+        header += "\tsensors"
+    if class_details:
+        header += "\t" + "\t".join(f"f1_{label}" for label in range(1, 7))
+    print(header)
     for group in result["groups"]:
         deviation = "NA" if group["macro_f1_std"] is None else f"{group['macro_f1_std']:.6f}"
-        print(
+        line = (
             f"{group['name']}\t{','.join(map(str, group['seeds']))}\t{group['n']}\t"
             f"{group['macro_f1_mean']:.6f}\t{deviation}"
         )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+        if compact:
+            line += f"\t{sensor_variant(group['config']['sensor_features'])}"
+        if class_details:
+            scores = group.get("class_f1_mean", {})
+            line += "\t" + "\t".join(
+                f"{scores[str(label)]:.6f}" if str(label) in scores else "NA"
+                for label in range(1, 7)
+            )
+        print(line)
+    if compact:
+        for delta in result["paired"]:
+            print(
+                f"Paired {delta['candidate']} - {delta['reference']}: "
+                f"mean={delta['mean_delta']:+.6f}, wins={delta['wins']}, ties={delta['ties']}"
+            )
+        if result["skipped_incomplete"]:
+            print(f"Skipped incomplete runs: {len(result['skipped_incomplete'])}")
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def main(argv=None):
@@ -430,6 +458,12 @@ def main(argv=None):
     compare.add_argument("--run_root", type=Path)
     compare.add_argument("--require_seeds", type=int, nargs="+")
     compare.add_argument("--paired", action="store_true")
+    compare.add_argument(
+        "--compact", action="store_true", help="Print tables without the full JSON"
+    )
+    compare.add_argument(
+        "--class_details", action="store_true", help="Include six class F1 columns"
+    )
     compare.set_defaults(handler=compare_command)
     args = parser.parse_args(argv)
     args.handler(args)

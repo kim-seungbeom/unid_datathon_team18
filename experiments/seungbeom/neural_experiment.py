@@ -31,6 +31,7 @@ SOURCE_FILES = (
     "experiments/seungbeom/neural_config.py",
     "experiments/seungbeom/neural_model.py",
     "experiments/seungbeom/neural_data.py",
+    "experiments/seungbeom/neural_sensors.py",
     "experiments/seungbeom/neural_experiment.py",
 )
 
@@ -171,7 +172,7 @@ def train(args):
     from experiments.seungbeom.neural_config import model_config
     from experiments.seungbeom.neural_data import VisualDataset, visual_vectors
     from experiments.seungbeom.neural_model import NeuralFusionClassifier
-    from preprocessing import SensorPreprocessor
+    from experiments.seungbeom.neural_sensors import NeuralSensorPreprocessor
     from runtime import environment_metadata, seed_everything, select_device
     from schema import LABELS, read_frame, validate_split
     from training_objectives import build_training_components
@@ -197,7 +198,7 @@ def train(args):
         device = select_device(args.device)
         seed_everything(config["seed"])
         write_json(run / "environment.json", environment_metadata(device))
-        preprocessor = SensorPreprocessor.fit(
+        preprocessor = NeuralSensorPreprocessor.fit(
             frames[0],
             config["sensor_features"],
             imputation=config["sensor_imputation"],
@@ -276,7 +277,8 @@ def train(args):
                     raise ValueError("Training gradients are nonfinite.")
                 optimizer.step()
                 total += float(loss.item()) * len(batch["targets"])
-            # Epoch selection uses the same row-independent path as exported inference.
+            # Sensors were built on the full split before batching. Model evaluation
+            # is per-row; causal sensor history can still depend on preceding rows.
             metrics = evaluate(model, val_loader, device, stable=True)
             improved, stopped = stopper.update(metrics["macro_f1"], epoch)
             synchronize(device)
@@ -347,6 +349,17 @@ def train(args):
                 "scheduler": None,
                 "parameter_count": sum(p.numel() for p in model.parameters()),
                 "selection_split": "validation",
+                "sensor_history": preprocessor.uses_history,
+                "history_context": (
+                    "same_experiment_current_and_past_rows_in_supplied_csv"
+                    if preprocessor.uses_history
+                    else "current_row"
+                ),
+                "arbitrary_subset_invariance": (
+                    "not_guaranteed_when_required_past_rows_are_removed"
+                    if preprocessor.uses_history
+                    else "row_independent"
+                ),
                 "resume_supported": False,
             },
         )
@@ -369,7 +382,7 @@ def predict(args):
 
     from experiments.seungbeom.neural_data import VisualDataset, visual_vectors
     from experiments.seungbeom.neural_model import NeuralFusionClassifier
-    from preprocessing import SensorPreprocessor
+    from experiments.seungbeom.neural_sensors import NeuralSensorPreprocessor
     from runtime import seed_everything, select_device
     from schema import LABELS, read_frame
 
@@ -389,6 +402,19 @@ def predict(args):
 
     if checkpoint["model_config"] != model_config(config):
         raise ValueError("Saved model structure and config disagree.")
+    preprocessor = NeuralSensorPreprocessor.from_dict(checkpoint["preprocessor"])
+    if (
+        tuple(config["sensor_features"]) != preprocessor.feature_names
+        or config["sensor_imputation"] != preprocessor.imputation
+        or config["sensor_scaling"] != preprocessor.scaling
+    ):
+        raise ValueError("Saved sensor preprocessing differs from model config.")
+    if preprocessor.uses_history:
+        print(
+            "Causal sensor history uses only this input CSV. Removing required past rows "
+            "can change predictions; this run has not established arbitrary-subset compliance.",
+            flush=True,
+        )
     seed_everything(config["seed"])
     device = select_device(args.device)
     frame = read_frame(args.input)
@@ -401,9 +427,6 @@ def predict(args):
             expected=checkpoint["visual_contract"],
             device=args.device,
         )
-    preprocessor = SensorPreprocessor.from_dict(checkpoint["preprocessor"])
-    if tuple(config["sensor_features"]) != preprocessor.feature_names:
-        raise ValueError("Saved sensor feature order differs from model config.")
     dataset = VisualDataset(
         frame, args.image_root, preprocessor, config, vectors=vectors, labeled=False
     )
