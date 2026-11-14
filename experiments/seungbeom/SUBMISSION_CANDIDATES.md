@@ -113,3 +113,58 @@ python experiments/seungbeom/tree_candidates.py \
 신경망과 트리 번들의 저장 형식이 다릅니다. 최종 코드 제출 전에는 선택한 방식과 가중치를
 대회가 요구하는 `test.py` 진입점에 연결하고, 반복·순서 변경·부분 입력 추론의 재현성을
 해당 진입점으로 확인합니다.
+
+## 중간 점검: ResNet18 신경망 + ExtraTrees 고정 50:50
+
+`midpoint_blend.py`는 기존 두 모델의 1~6단계 확률을 동일 비율로 평균하는 별도 후보입니다.
+모델별 최종 라벨을 평균하지 않습니다. 새 학습·가중치 탐색·Test 맞춤 전처리를 하지 않으며,
+원본 센서 5개와 같은 고정 ResNet18 이미지 벡터를 사용합니다. 각 모델의 저장된 센서 처리와
+이미지 표준화/PCA는 각각 유지합니다. ConvNeXt·과거 피처·주변 온도 피처는 섞지 않습니다.
+두 모델의 오류가 보완되는지는 결합 결과를 평가해야 알 수 있습니다.
+추가 학습에 따른 과적합을 늘리지 않도록 기존 가중치를 고정하며, 신경망은 마지막 epoch가
+아닌 저장된 최고 Validation 체크포인트를 사용합니다. 같은 Validation에서 반복 선택한
+점수의 낙관성까지 제거되는 것은 아니므로, 개선 확인 시 실험 단위 추가 검증이 필요합니다.
+
+실행 중인 작업이 끝난 뒤 위 1번대로 브랜치를 pull하고, 같은 개인 가상환경에서 진행합니다.
+새 tmux는 `tmux new-session -A -s seungbeom-blend`로 열 수 있습니다.
+
+먼저 실제 이미지에서 벡터를 다시 추출해 Validation 단독 모델과 50:50 결합을 비교합니다.
+검증 입력의 해시가 저장된 Validation과 같아야 하고, 두 단독 모델의 Macro F1이 기존
+기록과 일치해야 recipe를 저장합니다. 점수 일치는 개별 예측 전체의 동일성을 증명하지는
+않습니다. 이 단계는 Test를 읽지 않습니다.
+
+```bash
+cd /home/ubuntu/seungbeom/unid_datathon_team18
+source /home/ubuntu/seungbeom/venv-ensemble/bin/activate
+
+python -u experiments/seungbeom/midpoint_blend.py validate \
+  --neural_run runs/seungbeom/neural_fusion_seed42/embedding_concat_s42_3daac9bb72d0ba69 \
+  --ensemble_run runs/seungbeom/classwise_resnet18_seed42 \
+  --input /home/ubuntu/data/battery_data_light/validation/validation.csv \
+  --image_root /home/ubuntu/data/battery_data_light/validation \
+  --output_dir runs/seungbeom/midpoint_blend_seed42 \
+  --device cuda
+```
+
+`neural`, `extra_trees`, `blend_50_50` 세 줄의 Macro F1과 단계별 F1이 출력됩니다.
+조합이 더 낮아도 고정 조합 자체의 recipe는 저장하며, 좋은 결과라고 자동 판단하지 않습니다.
+개별 모델 점수가 재현되지 않으면 중단하고 원인을 확인합니다.
+
+완료된 recipe로 새로운 후보 CSV를 생성합니다. 같은 서버 환경에서 연속 실행하고,
+검증과 추론 사이 코드·체크포인트를 변경하지 않습니다. 이미지 추출은 각 명령에서 한 번씩
+실행하며 해당 호출의 현재 이미지를 두 모델에 함께 사용합니다.
+
+```bash
+python -u experiments/seungbeom/midpoint_blend.py predict \
+  --recipe runs/seungbeom/midpoint_blend_seed42/recipe.json \
+  --input /home/ubuntu/data/battery_data_light/test/test.csv \
+  --image_root /home/ubuntu/data/battery_data_light/test \
+  --sample_submission /home/ubuntu/data/battery_data_light/sample_submission.csv \
+  --output runs/seungbeom/submissions_midpoint_seed42/submission_resnet_mlp_extratrees_50_50.csv \
+  --device cuda
+```
+
+기존 제출 파일은 유지합니다. 같은 폴더의 `.manifest.json`에는 고정 비율·사용 모델 해시·코드
+해시·Validation 비교 결과가 기록됩니다. 검증 폴더나 출력 파일이 이미 있으면 덮어쓰지
+않으므로 재실행은 새 경로를 사용합니다. CSV만 사람이 리더보드에 업로드하며, 이 스크립트는
+업로드하거나 최종 파일을 선택하지 않습니다. 최종 `test.py` 연결은 후보 결정 후 별도 작업입니다.
