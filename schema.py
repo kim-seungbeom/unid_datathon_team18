@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 
 RAW_SENSOR_COLUMNS = ("meas_v", "meas_a", "meas_t1", "meas_t2", "meas_p")
+# Official numeric columns: required only when a selected feature depends on them.
+OPTIONAL_SENSOR_COLUMNS = ("meas_co", "meas_co2", "meas_ch4", "atmp_t", "thermal_t")
 # Compatibility for callers of the original starter; these are CSV columns, not model features.
 SENSOR_COLUMNS = RAW_SENSOR_COLUMNS
 LABELS = (1, 2, 3, 4, 5, 6)

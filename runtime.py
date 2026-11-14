@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from preprocessing import validate_scaling
 from sensor_features import DEFAULT_SENSOR_FEATURES, validate_feature_names, validate_imputation
 
 ROOT = Path(__file__).resolve().parent
@@ -39,6 +40,7 @@ def load_config(path: str | Path) -> dict:
     config.setdefault("mode", "multimodal")
     config.setdefault("sensor_features", list(DEFAULT_SENSOR_FEATURES))
     config.setdefault("sensor_imputation", "median")
+    config.setdefault("sensor_scaling", "standard")
     positive_ints = ("image_size", "batch_size", "epochs", "sensor_hidden", "fusion_hidden")
     expected = set(positive_ints) | {
         "seed",
@@ -49,9 +51,10 @@ def load_config(path: str | Path) -> dict:
         "mode",
         "sensor_features",
         "sensor_imputation",
+        "sensor_scaling",
     }
     if set(config) != expected:
-        raise ValueError("Config keys must match configs/baseline.json exactly.")
+        raise ValueError("Config contains missing or unsupported keys.")
     for key in positive_ints:
         if type(config[key]) is not int or config[key] <= 0:
             raise ValueError(f"{key} must be a positive integer.")
@@ -71,6 +74,7 @@ def load_config(path: str | Path) -> dict:
         raise ValueError("mode must be multimodal or sensor_only.")
     config["sensor_features"] = list(validate_feature_names(config["sensor_features"]))
     validate_imputation(config["sensor_imputation"])
+    validate_scaling(config["sensor_scaling"])
     return config
 
 

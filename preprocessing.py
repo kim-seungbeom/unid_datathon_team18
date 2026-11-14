@@ -8,6 +8,7 @@ import pandas as pd
 from schema import RAW_SENSOR_COLUMNS
 from sensor_features import (
     DEFAULT_SENSOR_FEATURES,
+    EXTENDED_SENSOR_FEATURES,
     SENSOR_FEATURE_VERSION,
     build_sensor_features,
     uses_history,
@@ -15,6 +16,12 @@ from sensor_features import (
     validate_imputation,
 )
 from temporal import TEMPORAL_VERSION
+
+
+def validate_scaling(scaling: str) -> str:
+    if scaling not in ("standard", "robust"):
+        raise ValueError("sensor_scaling must be standard or robust.")
+    return scaling
 
 
 def sensor_values(
@@ -29,10 +36,16 @@ def sensor_values(
 @dataclass
 class SensorPreprocessor:
     medians: np.ndarray
+    # Legacy storage name: standard uses means; robust stores median centers here.
     means: np.ndarray
     scales: np.ndarray
     feature_names: tuple[str, ...] = DEFAULT_SENSOR_FEATURES
     imputation: str = "median"
+    scaling: str = "standard"
+
+    @property
+    def centers(self) -> np.ndarray:
+        return self.means
 
     @property
     def uses_history(self) -> bool:
@@ -49,9 +62,11 @@ class SensorPreprocessor:
         feature_names=DEFAULT_SENSOR_FEATURES,
         *,
         imputation="median",
+        scaling="standard",
     ) -> "SensorPreprocessor":
         names = validate_feature_names(feature_names)
         validate_imputation(imputation)
+        validate_scaling(scaling)
         # Fallback medians use observed Train features, not replicated forward-filled values.
         values = sensor_values(train_frame, names)
         if not len(values):
@@ -64,12 +79,21 @@ class SensorPreprocessor:
         )
         causal_values = sensor_values(train_frame, names, imputation=imputation)
         filled = np.where(np.isnan(causal_values), medians, causal_values)
-        scales = filled.std(axis=0)
+        if scaling == "robust":
+            lower, means, upper = np.quantile(filled, [0.25, 0.5, 0.75], axis=0, method="linear")
+            scales = upper - lower
+        else:
+            scales = filled.std(axis=0)
+            means = filled.mean(axis=0)
+        # Project convention for either scale: tiny spread becomes 1, with no clipping.
         scales[scales < 1e-8] = 1.0
-        means = filled.mean(axis=0)
+        # Missingness is an explicit binary signal, even if Train never had missing values.
+        flags = np.array([name.endswith("_missing") for name in names])
+        means[flags] = 0.0
+        scales[flags] = 1.0
         if not all(np.isfinite(array).all() for array in (medians, means, scales)):
             raise ValueError("Training preprocessing statistics must be finite.")
-        return cls(medians, means, scales, names, imputation)
+        return cls(medians, means, scales, names, imputation, scaling)
 
     def impute(self, frame: pd.DataFrame) -> np.ndarray:
         values = sensor_values(frame, self.feature_names, imputation=self.imputation)
@@ -84,11 +108,12 @@ class SensorPreprocessor:
 
     def to_dict(self) -> dict:
         return {
-            "format_version": 3,
+            "format_version": 4,
             "feature_version": SENSOR_FEATURE_VERSION,
             "raw_sensor_columns": list(RAW_SENSOR_COLUMNS),
             "feature_names": list(self.feature_names),
             "imputation": self.imputation,
+            "scaling": self.scaling,
             "temporal_version": TEMPORAL_VERSION if self.uses_history else None,
             "medians": self.medians.tolist(),
             "means": self.means.tolist(),
@@ -104,17 +129,22 @@ class SensorPreprocessor:
                 raise ValueError("Feature metadata requires preprocessing format_version 2.")
             raw_columns = state["sensor_columns"]
             names = DEFAULT_SENSOR_FEATURES
-        elif version in (2, 3):
+        elif version in (2, 3, 4):
             if state["feature_version"] != SENSOR_FEATURE_VERSION:
                 raise ValueError("Saved sensor feature version does not match this code.")
             raw_columns = state["raw_sensor_columns"]
             names = validate_feature_names(state["feature_names"])
         else:
             raise ValueError("Unsupported preprocessing format version.")
-        imputation = validate_imputation(state["imputation"]) if version == 3 else "median"
+        imputation = validate_imputation(state["imputation"]) if version >= 3 else "median"
+        scaling = validate_scaling(state["scaling"]) if version >= 4 else "standard"
+        if version < 4 and state.get("scaling", "standard") != "standard":
+            raise ValueError("Nonstandard scaling requires preprocessing format_version 4.")
+        if version < 4 and set(names) & set(EXTENDED_SENSOR_FEATURES):
+            raise ValueError("Extended sensor features require preprocessing format_version 4.")
         if version < 3 and uses_history(names, imputation):
             raise ValueError("Temporal features require preprocessing format_version 3.")
-        if version == 3:
+        if version >= 3:
             expected_temporal = TEMPORAL_VERSION if uses_history(names, imputation) else None
             if state.get("temporal_version") != expected_temporal:
                 raise ValueError("Saved temporal version does not match this code.")
@@ -127,4 +157,7 @@ class SensorPreprocessor:
             raise ValueError("Invalid saved preprocessing state.")
         if (arrays[2] <= 0).any():
             raise ValueError("Saved scales must be positive.")
-        return cls(*arrays, feature_names=names, imputation=imputation)
+        flags = np.array([name.endswith("_missing") for name in names])
+        if (arrays[1][flags] != 0).any() or (arrays[2][flags] != 1).any():
+            raise ValueError("Saved missing indicators require center 0 and scale 1.")
+        return cls(*arrays, feature_names=names, imputation=imputation, scaling=scaling)

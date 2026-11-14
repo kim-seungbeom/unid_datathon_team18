@@ -69,10 +69,13 @@ def main() -> None:
     train_frame = read_frame(args.train_csv, labeled=True, require_images=use_images)
     val_frame = read_frame(args.val_csv, labeled=True, require_images=use_images)
     validate_split(train_frame, val_frame)
-    args.run_dir.mkdir(parents=True, exist_ok=False)
     preprocessor = SensorPreprocessor.fit(
-        train_frame, config["sensor_features"], imputation=config["sensor_imputation"]
+        train_frame,
+        config["sensor_features"],
+        imputation=config["sensor_imputation"],
+        scaling=config["sensor_scaling"],
     )
+    args.run_dir.mkdir(parents=True, exist_ok=False)
     model_config = {key: config[key] for key in ("sensor_hidden", "fusion_hidden", "dropout")}
     model_config.update(sensor_input_dim=preprocessor.input_dim, mode=config["mode"])
     model = FusionClassifier(**model_config).to(device)
@@ -117,6 +120,7 @@ def main() -> None:
             "sensor_features": list(preprocessor.feature_names),
             "uses_images": use_images,
             "sensor_imputation": preprocessor.imputation,
+            "sensor_scaling": preprocessor.scaling,
             "uses_history": preprocessor.uses_history,
             "features": "same-experiment current/past only; no targets or future observations",
         },
@@ -146,7 +150,7 @@ def main() -> None:
         if metrics["macro_f1"] > best_score:
             best_score = metrics["macro_f1"]
             checkpoint = {
-                "format_version": 3,
+                "format_version": 4,
                 "state_dict": {
                     key: value.detach().cpu() for key, value in model.state_dict().items()
                 },
