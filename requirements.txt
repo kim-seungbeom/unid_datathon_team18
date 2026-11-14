@@ -1,0 +1,3 @@
+# Preserve the organizer's existing CUDA build on the GPU server.
+torch
+-r requirements-common.txt
