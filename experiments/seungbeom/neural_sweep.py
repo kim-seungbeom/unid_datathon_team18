@@ -15,10 +15,23 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from experiments.seungbeom.neural_config import load_config, normalize_config  # noqa: E402
+from experiments.seungbeom.neural_config import (  # noqa: E402
+    EMBEDDING_DIMENSIONS,
+    load_config,
+    normalize_config,
+)
 from experiments.seungbeom.neural_sensors import TEMPORAL_VARIANTS, sensor_variant  # noqa: E402
 
-STAGES = ("lr", "regularization", "fusion", "encoders", "imbalance", "seeds", "temporal")
+STAGES = (
+    "lr",
+    "regularization",
+    "fusion",
+    "encoders",
+    "imbalance",
+    "seeds",
+    "temporal",
+    "pretrained",
+)
 
 
 def canonical(value) -> str:
@@ -43,6 +56,11 @@ def write_json(path, value, *, exclusive=False):
 
 
 def _variations(stage, seeds, include_focal):
+    if stage == "pretrained":
+        return [
+            {"embedding_encoder": name, "embedding_dim": EMBEDDING_DIMENSIONS[name]}
+            for name in ("resnet18", "convnext_tiny", "dinov2")
+        ]
     if stage == "temporal":
         return [{"sensor_features": list(names)} for names in TEMPORAL_VARIANTS.values()]
     if stage == "lr":
@@ -74,6 +92,8 @@ def create_plan(base_configs, stage, *, max_trials=9, seeds=(42, 43, 44), includ
     trials, seen = [], set()
     for index, config in enumerate(base_configs):
         base = normalize_config(config)
+        if stage == "pretrained" and base["encoder"] != "embedding":
+            raise ValueError("Pretrained comparison requires an embedding encoder base config.")
         if stage == "imbalance" and base["sampling"] != "shuffle":
             raise ValueError(
                 "Loss comparisons require shuffle sampling; change one factor at a time."
@@ -155,6 +175,63 @@ def _cache_identity(train_embeddings, val_embeddings):
     return result
 
 
+def _encoder_cache_routes(args, trials):
+    """Explicit model-specific cache pairs; unlisted encoders extract current images."""
+    entries = getattr(args, "encoder_embeddings", None) or []
+    global_pair = (args.train_embeddings, args.val_embeddings)
+    if (global_pair[0] is None) != (global_pair[1] is None):
+        raise ValueError("Provide both training and validation caches, or neither.")
+    if entries and global_pair[0] is not None:
+        raise ValueError("Do not mix global and per-encoder embedding caches.")
+    if (entries or global_pair[0] is not None) and any(
+        trial["config"]["encoder"] != "embedding" for trial in trials
+    ):
+        raise ValueError("Image caches are only accepted for embedding-encoder plans.")
+    models = {trial["config"]["embedding_encoder"] for trial in trials}
+    if global_pair[0] is not None and len(models) > 1:
+        raise ValueError("Mixed encoder plans require per-encoder caches, not one global pair.")
+    routes = {}
+    for entry in entries:
+        if len(entry) != 3:
+            raise ValueError("Each encoder cache needs MODEL TRAIN_DIR VAL_DIR.")
+        name, train, val = entry
+        if name not in models or name not in EMBEDDING_DIMENSIONS or name in routes:
+            raise ValueError("Unknown, unused, or duplicate encoder cache mapping.")
+        routes[name] = (Path(train), Path(val))
+    for name, pair in routes.items():
+        contracts = []
+        for directory in pair:
+            meta = read_json(directory / "metadata.json")
+            if (
+                meta.get("status") != "complete"
+                or meta.get("model") != name
+                or meta.get("dimension") != EMBEDDING_DIMENSIONS[name]
+                or meta.get("trained") is not False
+                or not isinstance(meta.get("weights"), str)
+                or not meta["weights"]
+                or not isinstance(meta.get("preprocessing"), dict)
+                or not meta["preprocessing"]
+                or type(meta.get("l2_normalize")) is not bool
+            ):
+                raise ValueError("Incomplete or mismatched encoder cache metadata.")
+            contracts.append(
+                {
+                    key: meta[key]
+                    for key in (
+                        "model",
+                        "dimension",
+                        "weights",
+                        "preprocessing",
+                        "l2_normalize",
+                        "trained",
+                    )
+                }
+            )
+        if contracts[0] != contracts[1]:
+            raise ValueError("Train and Validation encoder cache contracts differ.")
+    return routes
+
+
 def run_command(args, *, identity_fn=None, runner=None):
     if identity_fn is None:
         from experiments.seungbeom.neural_experiment import run_identity
@@ -163,14 +240,15 @@ def run_command(args, *, identity_fn=None, runner=None):
     runner = subprocess.run if runner is None else runner
     plan = read_json(args.plan)
     trials = validate_plan(plan)
-    if args.train_embeddings is not None and any(
-        trial["config"]["encoder"] != "embedding" for trial in trials
-    ):
-        raise ValueError("Image caches are only accepted for embedding-encoder plans.")
+    routes = _encoder_cache_routes(args, trials)
     root = args.run_root
     manifest_path = root / "sweep_status.json"
     cache_identity = _cache_identity(args.train_embeddings, args.val_embeddings)
     context = {"plan": plan, "cached_embeddings_sha256": cache_identity}
+    if routes:
+        context["cached_embeddings_by_encoder_sha256"] = {
+            name: _cache_identity(*pair) for name, pair in sorted(routes.items())
+        }
     if manifest_path.exists():
         manifest = read_json(manifest_path)
         if manifest["context"] != context:
@@ -185,12 +263,15 @@ def run_command(args, *, identity_fn=None, runner=None):
         write_json(manifest_path, manifest, exclusive=True)
     for trial in trials:
         directory = root / trial["id"]
+        train_cache, val_cache = routes.get(
+            trial["config"]["embedding_encoder"], (args.train_embeddings, args.val_embeddings)
+        )
         expected = identity_fn(
             trial["config"],
             args.data_dir / "train" / "train.csv",
             args.data_dir / "validation" / "validation.csv",
-            train_embeddings=args.train_embeddings,
-            val_embeddings=args.val_embeddings,
+            train_embeddings=train_cache,
+            val_embeddings=val_cache,
         )
         state = manifest["trials"][trial["id"]]
         if directory.exists():
@@ -227,12 +308,12 @@ def run_command(args, *, identity_fn=None, runner=None):
             "--device",
             args.device,
         ]
-        if args.train_embeddings is not None and trial["config"]["encoder"] == "embedding":
+        if train_cache is not None and trial["config"]["encoder"] == "embedding":
             command += [
                 "--train_embeddings",
-                str(args.train_embeddings),
+                str(train_cache),
                 "--val_embeddings",
-                str(args.val_embeddings),
+                str(val_cache),
             ]
         state.update(status="running", reused=False)
         write_json(manifest_path, manifest)
@@ -398,11 +479,14 @@ def compare_command(args):
                 raise ValueError("Run config differs from the planned trial.")
             directories.append(directory)
     result = summarize(directories, args.require_seeds, args.paired)
+    print(
+        f"Completed runs: {len(directories) - len(result['skipped_incomplete'])}/{len(directories)}"
+    )
     compact = getattr(args, "compact", False)
     class_details = getattr(args, "class_details", False)
     header = "variant\tseeds\tn\tmacro_f1_mean\tmacro_f1_std"
     if compact:
-        header += "\tsensors"
+        header += "\tsensors\timage_encoder\tbest_epoch"
     if class_details:
         header += "\t" + "\t".join(f"f1_{label}" for label in range(1, 7))
     print(header)
@@ -413,7 +497,13 @@ def compare_command(args):
             f"{group['macro_f1_mean']:.6f}\t{deviation}"
         )
         if compact:
-            line += f"\t{sensor_variant(group['config']['sensor_features'])}"
+            image_encoder = (
+                group["config"]["embedding_encoder"]
+                if group["config"]["encoder"] == "embedding"
+                else group["config"]["encoder"]
+            )
+            line += f"\t{sensor_variant(group['config']['sensor_features'])}\t{image_encoder}"
+            line += "\t" + ",".join(str(run["best_epoch"] or "NA") for run in group["runs"])
         if class_details:
             scores = group.get("class_f1_mean", {})
             line += "\t" + "\t".join(
@@ -450,6 +540,13 @@ def main(argv=None):
     run.add_argument("--run_root", type=Path, required=True)
     run.add_argument("--train_embeddings", type=Path)
     run.add_argument("--val_embeddings", type=Path)
+    run.add_argument(
+        "--encoder_embeddings",
+        nargs=3,
+        action="append",
+        metavar=("MODEL", "TRAIN_DIR", "VAL_DIR"),
+        help="Repeat for each cached encoder; unlisted models extract images in their trial",
+    )
     run.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     run.set_defaults(handler=run_command)
     compare = commands.add_parser("compare", help="Compare explicit complete runs or a saved plan")

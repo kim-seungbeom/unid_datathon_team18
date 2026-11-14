@@ -135,6 +135,56 @@ PY
 | `imbalance` | 일반 CE / 가중 CE, 선택적으로 `--include_focal` | 2 또는 3 |
 | `seeds` | 동일 후보를 seed 42, 43, 44로 반복 | 기본 3 |
 | `temporal` | 원본 / 전압 30초 / 압력 30초 / 온도 변화율 / 결합 | 5 |
+| `pretrained` | 고정 사전학습 ResNet18 / ConvNeXt-Tiny / DINOv2-Small | 3 |
+
+### 다음 실행: 사전학습 이미지 인코더 비교
+
+**현재 서버의 temporal sweep이 전부 끝난 뒤** 같은 브랜치를 pull합니다. 실행 중인
+서버 clone에서는 pull하지 않습니다. 로컬 수정·push는 서버 파일을 자동으로 바꾸지 않습니다.
+이 비교는 센서 원본 5개·concat·seed·학습 조건을 유지하고 이미지 인코더와 그 출력 차원만
+바꿉니다. 이미지 인코더는 고정하고 결합 신경망만 학습합니다. `encoders` 단계의 무작위
+초기화 ResNet과 구별됩니다. 출력 차원에 따라 결합층 파라미터 수도 달라지는 비교입니다.
+
+```bash
+source /home/ubuntu/seungbeom/venv-ensemble/bin/activate
+python -m pip install 'transformers>=4.36,<5' safetensors
+
+python experiments/seungbeom/neural_sweep.py plan \
+  --stage pretrained --max_trials 3 \
+  --base_config runs/seungbeom/neural_fusion_seed42/embedding_concat_s42_3daac9bb72d0ba69/config.json \
+  --output runs/seungbeom/neural_plans/pretrained_seed42.json
+
+python -u experiments/seungbeom/neural_sweep.py run \
+  --plan runs/seungbeom/neural_plans/pretrained_seed42.json \
+  --data_dir /home/ubuntu/data/battery_data_light \
+  --run_root runs/seungbeom/neural_pretrained_seed42 \
+  --encoder_embeddings resnet18 \
+    runs/seungbeom/classwise_resnet18_seed42/embeddings/train \
+    runs/seungbeom/classwise_resnet18_seed42/embeddings/validation \
+  --device cuda
+
+python experiments/seungbeom/neural_sweep.py compare \
+  --plan runs/seungbeom/neural_plans/pretrained_seed42.json \
+  --run_root runs/seungbeom/neural_pretrained_seed42 \
+  --compact --class_details
+```
+
+ResNet18은 기존 이미지 벡터만 재사용하고 분류 신경망은 다시 학습합니다. ConvNeXt·DINOv2는
+각 실행 폴더에서 Train/Validation 이미지를 순차 추출합니다. 입력 행·배치 변화에 대한 기존
+재현 경로를 유지하기 위해 추출 batch size 1을 유지하므로 추출에 시간이 걸릴 수 있습니다.
+첫 실행 시 공개 가중치를 내려받습니다. 데이터는 외부로 보내지 않습니다.
+
+다른 인코더의 완료 캐시가 이미 있으면 `--encoder_embeddings 모델명 Train폴더 Validation폴더`를
+추가합니다. 인코더 이름·차원·가중치·전처리·완료 상태를 검사하며, 서로 다른 인코더에 같은
+`--train_embeddings`/`--val_embeddings` 한 쌍을 공통 적용하는 명령은 거절합니다.
+동일 입력·코드·캐시·설정의 완료 실험만 재사용하며 실패 폴더는 새 run_root로 재시도합니다.
+공통 비교표의 `image_encoder`, `best_epoch`, 완료 수를 확인합니다. 서로 다른 인코더의 캐시는
+동일 provenance가 아니므로 이 단계에서는 `--paired`를 사용하지 않습니다.
+
+출처·버전·라이선스는 [이미지 인코더 안내](../../image_features/README.md)의 명시적 ImageNet V1
+가중치와 고정 DINOv2 revision을 유지합니다. 공식 설명:
+[ConvNeXt-Tiny](https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.convnext_tiny.html),
+[DINOv2-Small](https://huggingface.co/facebook/dinov2-small).
 
 ### 현재 진행: 최고 concat 모델에 시간 피처 추가
 
