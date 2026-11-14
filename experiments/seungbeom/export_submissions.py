@@ -31,6 +31,7 @@ SOURCE_FILES = (
     "image_features/extract_features.py",
     "experiments/seungbeom/neural_config.py",
     "experiments/seungbeom/neural_data.py",
+    "experiments/seungbeom/neural_sensors.py",
     "experiments/seungbeom/neural_model.py",
     "experiments/seungbeom/neural_experiment.py",
     "experiments/seungbeom/classwise_ensemble.py",

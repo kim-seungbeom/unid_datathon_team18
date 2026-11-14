@@ -7,8 +7,8 @@ import json
 import math
 from pathlib import Path
 
+from experiments.seungbeom.neural_sensors import validate_neural_features
 from schema import RAW_SENSOR_COLUMNS
-from sensor_features import uses_history, validate_feature_names
 
 EMBEDDING_DIMENSIONS = {"resnet18": 512, "dinov2": 384, "convnext_tiny": 768}
 DEFAULT_CONFIG = {
@@ -92,11 +92,9 @@ def normalize_config(config: dict) -> dict:
         if upper is not None and (value > upper or (name == "dropout" and value == upper)):
             raise ValueError(f"Invalid {name}.")
         result[name] = float(value)
-    names = list(validate_feature_names(result["sensor_features"]))
+    names = list(validate_neural_features(result["sensor_features"]))
     if result["sensor_imputation"] != "median" or result["sensor_scaling"] != "standard":
         raise ValueError("Neural structure comparisons use median imputation and standard scaling.")
-    if uses_history(names):
-        raise ValueError("Neural structure comparisons support current-row features only.")
     result["sensor_features"] = names
     if result["loss"] not in ("cross_entropy", "weighted_cross_entropy", "focal"):
         raise ValueError("Unsupported neural loss.")
