@@ -21,6 +21,7 @@ weights/
 *.joblib
 *.log
 *.ipynb
+!image_features/01_extract_features.ipynb
 *.png
 *.jpg
 *.jpeg

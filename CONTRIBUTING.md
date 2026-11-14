@@ -84,6 +84,7 @@ unid_datathon_team18/
 - 코드 전달 방향은 로컬 commit·push → 서버의 같은 브랜치에서 pull입니다. 서버에 첫 레포를 준비할 때는 개인 폴더 아래 clone합니다. 데이터·venv는 Git으로 전달하지 않습니다.
 - 실행에 쓸 코드는 학습 시작 전에 동기화합니다. 실행 중인 레포에서 pull하거나 브랜치를 바꾸지 않습니다.
 - 수정 파일만 명시적으로 stage합니다. `git diff --cached --name-only`와 `python scripts/check_staged.py`를 확인합니다. 검사기는 알려진 경로·확장자를 검사하는 보조 수단이며 비밀값 검사나 접근 차단을 보장하지 않습니다.
+- 이미지 특징 추출용 `image_features/01_extract_features.ipynb` 원본만 예외로 추적합니다. 이 파일을 stage한 PR은 `python scripts/check_staged.py --allow_clean_notebook`을 사용합니다. 검사기는 Git index의 실제 노트북을 읽어 실행 번호·출력·첨부·셀 메타데이터가 없는지 확인하며, 다른 노트북과 데이터 파일은 계속 차단합니다. 실행본은 커밋하지 않습니다.
 - 서버에 미커밋 변경이 있으면 먼저 보존하고 합칩니다. 강제 push·`reset --hard`는 사용하지 않습니다.
 
 ## 담당 범위 예시
