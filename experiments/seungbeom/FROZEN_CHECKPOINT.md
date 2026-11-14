@@ -41,6 +41,12 @@ python -u experiments/seungbeom/frozen_checkpoint.py train \
 
 기존 모델 재현 → `Stage 1/2` 내부 선택·최고 체크포인트 저장 → `Stage 2/2` 전체 Train 재학습 → 공식 Validation 비교 순서다. 최고 갱신 시 `Saved inner_best.pt: epoch=... inner_macro_f1=...`가 출력된다. 중간에 내려간 점수로 최고 파일을 교체하지 않는다. 종료할 때까지 같은 clone에서 pull하지 않는다. 재실행은 새 output_dir/로그 이름을 사용한다.
 
+빠른 후보 확인은 `train` 명령에 `--max_epochs 10 --patience 3`을 추가하고, output_dir와 로그 이름을 `frozen_checkpoint_quick_seed42`로 바꾼다. 내부 선택은 최대 10 epoch이며 3회 연속 최고 점수를 갱신하지 못하면 종료한다. 전체 Train 재학습은 선택된 epoch만큼 수행하므로 최대 10회다. 옵션을 생략하면 원래 설정을 유지한다. 원본 recipe는 수정하지 않고 실제 적용한 예산을 manifest에 기록한다.
+
+이것은 학습 예산을 줄이는 비교다. 원래 선택 epoch보다 일찍 끝나면 성능이 달라질 수 있고, 이미지 평가 비용은 그대로이므로 전체 실행 시간이 정확히 절반이 되지는 않는다. 실행 중인 프로세스에는 새 옵션이 적용되지 않는다. 현재 clone에서 학습이 돌아가면 pull하지 않는다.
+
+`f639869`에서 시작한 실행의 추론은 해당 버전으로 수행한다. 이전 실행이 완료된 후 새 버전을 이미 pull했다면 `git worktree add --detach ../unid_frozen_checkpoint_v1 f639869`로 당시 코드를 별도 폴더에 준비하고, 그 폴더에서 `--run_dir` 등 경로를 기존 서버 폴더의 절대 경로로 지정한다. 소스 일치 검사를 우회하지 않는다. 기존 약 0.89 조합의 `frozen_tree_blend.py` 및 그 소스는 이번 예산 옵션 변경의 영향을 받지 않는다.
+
 ```bash
 python experiments/seungbeom/frozen_checkpoint.py report \
   --output_dir runs/seungbeom/frozen_checkpoint_seed42 \

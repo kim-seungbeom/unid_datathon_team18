@@ -21,6 +21,47 @@ def test_scripts_support_server_python310():
         ast.parse(Path(module.__file__).read_text(), feature_version=(3, 10))
 
 
+def test_budget_defaults_preserve_config_and_shortening_does_not_mutate_reference():
+    original = ft.normalize_config({})
+    before = original.copy()
+    assert experiment.budget_config(original) == original
+    short = experiment.budget_config(original, max_epochs=10, patience=3)
+    assert original == before
+    assert short == {**before, "epochs": 10, "patience": 3}
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"max_epochs": 0},
+        {"max_epochs": -1},
+        {"max_epochs": True},
+        {"max_epochs": 21},
+        {"patience": 0},
+        {"patience": 6},
+        {"patience": 1.5},
+    ],
+)
+def test_budget_rejects_invalid_or_expanded_limits(options):
+    with pytest.raises(ValueError, match="positive integer"):
+        experiment.budget_config(ft.normalize_config({}), **options)
+
+
+def test_short_budget_limits_both_phases_and_replays_checkpoints(case):  # noqa: F811
+    args, _, _, _ = case
+    args.max_epochs, args.patience = 1, 1
+    result = experiment.run(args)
+    manifest, _ = experiment.read_result(args.output_dir)
+    assert manifest["original_config"]["epochs"] == 2
+    assert manifest["reference"]["frozen"]["config"]["epochs"] == 2
+    assert manifest["config"]["epochs"] == result["selected_epoch"] == 1
+    assert manifest["budget_overrides"] == {"max_epochs": 1, "patience": 1}
+    for phase in ("selection", "refit"):
+        history = read_json(args.output_dir / f"{phase}_history.json")["epochs"]
+        assert [row["epoch"] for row in history] == [1]
+    assert result["checkpoint_replay_matches"] == {"inner_best": True, "refit": True}
+
+
 def test_save_callback_does_not_change_original_selection_trajectory(
     tmp_path,
     tiny_backbone,  # noqa: F811

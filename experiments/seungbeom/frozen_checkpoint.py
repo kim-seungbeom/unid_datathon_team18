@@ -141,6 +141,17 @@ def check_unchanged(manifest, reference, files, device):
         raise ValueError("Source changed during the run; do not pull while training.")
 
 
+def budget_config(original, max_epochs=None, patience=None):
+    """Only shorten the original training budget; never mutate the reference recipe."""
+    config = ft.normalize_config(original)
+    for key, value in (("epochs", max_epochs), ("patience", patience)):
+        if value is not None:
+            if type(value) is not int or not 1 <= value <= config[key]:
+                raise ValueError(f"{key} must be a positive integer <= the original {config[key]}.")
+            config[key] = value
+    return config
+
+
 def run(args):
     if args.output_dir.exists():
         raise ValueError("Output directory exists; choose a new output_dir.")
@@ -149,7 +160,15 @@ def run(args):
     reference = blend.read_comparison(args.recipe)
     if reference["source_sha256"] != blend.source_hashes():
         raise ValueError("Original inference source changed.")
-    config = ft.normalize_config(reference["frozen"]["config"])
+    original_config = ft.normalize_config(reference["frozen"]["config"])
+    config = budget_config(
+        original_config, getattr(args, "max_epochs", None), getattr(args, "patience", None)
+    )
+    print(
+        f"Training budget: inner selection <= {config['epochs']} epochs, "
+        f"patience={config['patience']}; all-Train refit <= {config['epochs']} epochs.",
+        flush=True,
+    )
     ft.seed_everything(config["seed"])
     device = ft.select_device(args.device)
     paths = {split: args.data_dir / split / f"{split}.csv" for split in ("train", "validation")}
@@ -182,6 +201,11 @@ def run(args):
         "format_version": 1,
         "objective": "row_uniform_cross_entropy",
         "config": config,
+        "original_config": original_config,
+        "budget_overrides": {
+            "max_epochs": getattr(args, "max_epochs", None),
+            "patience": getattr(args, "patience", None),
+        },
         "source_sha256": source_hashes(),
         "runtime": runtime_signature(device),
         "reference": reference,
@@ -548,6 +572,16 @@ def main(argv=None):
     for name in ("recipe", "data_dir", "output_dir"):
         training.add_argument("--" + name, type=Path, required=True)
     training.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    training.add_argument(
+        "--max_epochs",
+        type=int,
+        help="Shorten the original epoch cap; both phases stay within this cap.",
+    )
+    training.add_argument(
+        "--patience",
+        type=int,
+        help="Stop inner selection after this many epochs without improvement; may only shorten.",
+    )
     training.set_defaults(handler=run)
     reporting = commands.add_parser("report")
     reporting.add_argument("--output_dir", type=Path, required=True)
