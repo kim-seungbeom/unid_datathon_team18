@@ -99,15 +99,17 @@ def invented_sources(tmp_path, monkeypatch):
         },
     }
     calls = []
-    loaded = {"synthetic_fixture": True}
+    policies = []
+    loaded = {"synthetic_fixture": True, "config": {"seed": 42}}
 
     def load_sources(*args, **kwargs):
         return loaded, copy.deepcopy(provenance)
 
-    def predict_probabilities(current, image_root, models, device):
+    def predict_probabilities(current, image_root, models, device, image_precision="fp32"):
         assert models is loaded
         assert device == "cpu"
         calls.append(current["sample_id"].tolist())
+        policies.append(image_precision)
         order = pd.Index(frame["sample_id"]).get_indexer(current["sample_id"])
         assert (order >= 0).all()
         return {name: value[order].copy() for name, value in probabilities.items()}
@@ -121,6 +123,7 @@ def invented_sources(tmp_path, monkeypatch):
         image_root=tmp_path / "invented_images",
         output_dir=tmp_path / "validation_report",
         device="cpu",
+        reference_embeddings=None,
     )
     return {
         "args": args,
@@ -129,6 +132,8 @@ def invented_sources(tmp_path, monkeypatch):
         "checkpoints": checkpoints,
         "probabilities": probabilities,
         "calls": calls,
+        "policies": policies,
+        "loaded": loaded,
         "train_csv": train_csv,
     }
 
@@ -139,11 +144,15 @@ def test_validation_replays_both_models_and_records_fixed_candidate(invented_sou
     recipe = json.loads((state["args"].output_dir / "recipe.json").read_text())
     assert recipe["kind"] == "seungbeom_midpoint_blend"
     assert recipe["status"] == "complete"
-    assert recipe["format_version"] == 1
+    assert recipe["format_version"] == 2
+    assert recipe["image_precision"] == "fp32"
+    assert recipe["precision_audit"] is None
+    assert recipe["runtime_signature"]
     assert recipe["metrics"]["blend_50_50"]["macro_f1"] == 1.0
     assert recipe["provenance"] == state["provenance"]
     assert recipe["source_sha256"]
     assert state["calls"] == [state["frame"]["sample_id"].tolist()]
+    assert state["policies"] == ["fp32"]
 
 
 @pytest.mark.parametrize("problem", ["different_split", "train_split", "saved_score", "output"])
@@ -199,7 +208,19 @@ def test_prediction_preserves_template_ids_and_subset_values(invented_sources, t
 
 
 @pytest.mark.parametrize(
-    "problem", ["model_changed", "code_changed", "status", "rule", "template", "output"]
+    "problem",
+    [
+        "model_changed",
+        "code_changed",
+        "status",
+        "rule",
+        "template",
+        "output",
+        "missing_policy",
+        "unknown_policy",
+        "policy_without_audit",
+        "old_recipe",
+    ],
 )
 def test_prediction_guards_fail_before_inference(invented_sources, tmp_path, problem):
     state = invented_sources
@@ -220,6 +241,18 @@ def test_prediction_guards_fail_before_inference(invented_sources, tmp_path, pro
         recipe["rule"]["neural"] = 0.7
         recipe["rule"]["extra_trees"] = 0.3
         dump(args.recipe, recipe)
+    elif problem == "missing_policy":
+        del recipe["image_precision"]
+        dump(args.recipe, recipe)
+    elif problem == "unknown_policy":
+        recipe["image_precision"] = "unknown_precision"
+        dump(args.recipe, recipe)
+    elif problem == "policy_without_audit":
+        recipe["image_precision"] = "cudnn_tf32"
+        dump(args.recipe, recipe)
+    elif problem == "old_recipe":
+        recipe["format_version"] = 1
+        dump(args.recipe, recipe)
     elif problem == "template":
         pd.DataFrame({"sample_id": ["NA", "NA"], "label": [1, 1]}).to_csv(
             args.sample_submission, index=False
@@ -231,6 +264,83 @@ def test_prediction_guards_fail_before_inference(invented_sources, tmp_path, pro
     assert not state["calls"]
     if problem == "output":
         assert args.output.read_text() == "preserve existing submission"
+
+
+def test_runtime_drift_blocks_prediction_before_member_inference(
+    invented_sources, tmp_path, monkeypatch
+):
+    state = invented_sources
+    monkeypatch.setattr(blend, "runtime_signature", lambda *a, **k: {"torch": "invented_v1"})
+    blend.validate(state["args"])
+    args = predict_args(state, tmp_path)
+    state["calls"].clear()
+    monkeypatch.setattr(blend, "runtime_signature", lambda *a, **k: {"torch": "invented_v2"})
+    with pytest.raises(ValueError, match="[Rr]untime|[Ee]nvironment"):
+        blend.predict(args)
+    assert not state["calls"]
+    assert not args.output.exists()
+
+
+def test_audited_precision_is_saved_and_reused_without_cache_access_at_prediction(
+    invented_sources, tmp_path, monkeypatch
+):
+    state = invented_sources
+    reference = tmp_path / "independent_cache"
+    reference.mkdir()
+    reference_file = reference / "fixture.txt"
+    reference_file.write_text("independent synthetic cache marker")
+    audit = {
+        "image_precision": "cudnn_tf32",
+        "reference_files": {str(reference_file): digest(reference_file)},
+        "probe": {"exact": True, "rows": 6},
+        "cache_environment": {"fixture": "independent"},
+    }
+    state["args"].reference_embeddings = reference
+
+    def audit_cache(frame, image_root, loaded, reference_dir, device):
+        assert loaded is state["loaded"]
+        assert reference_dir == reference
+        assert device == "cpu"
+        assert frame["sample_id"].tolist() == state["frame"]["sample_id"].tolist()
+        return copy.deepcopy(audit)
+
+    monkeypatch.setattr(blend, "audit_cache", audit_cache)
+    recipe = blend.validate(state["args"])
+    assert recipe["image_precision"] == "cudnn_tf32"
+    assert recipe["precision_audit"] == audit
+    assert state["policies"] == ["cudnn_tf32"]
+    # Prediction must reconstruct live images, not consult the Validation cache.
+    reference_file.unlink()
+    reference.rmdir()
+    monkeypatch.setattr(
+        blend, "audit_cache", lambda *a, **k: pytest.fail("Prediction attempted cache audit")
+    )
+    args = predict_args(state, tmp_path)
+    blend.predict(args)
+    assert state["policies"] == ["cudnn_tf32", "cudnn_tf32"]
+    assert args.output.is_file()
+
+
+def test_precision_audit_does_not_relax_saved_metric_replay_guard(
+    invented_sources, tmp_path, monkeypatch
+):
+    state = invented_sources
+    state["args"].reference_embeddings = tmp_path / "synthetic_cache"
+    monkeypatch.setattr(
+        blend,
+        "audit_cache",
+        lambda *a, **k: {
+            "image_precision": "cudnn_tf32",
+            "reference_files": {},
+            "probe": {"exact": True},
+            "cache_environment": {},
+        },
+    )
+    state["provenance"]["saved_macro_f1"]["neural"] += 0.00001
+    with pytest.raises(ValueError, match="replay differs"):
+        blend.validate(state["args"])
+    assert not (state["args"].output_dir / "recipe.json").exists()
+    assert state["policies"] == ["cudnn_tf32"]
 
 
 def test_live_member_integration_uses_saved_transforms_one_extraction_and_ordered_classes(
@@ -285,6 +395,7 @@ def test_live_member_integration_uses_saved_transforms_one_extraction_and_ordere
         "trained": False,
     }
     calls = []
+    extraction_precision = []
 
     def matrix(current):
         sensors = build_sensor_features(current).reset_index(drop=True).add_prefix("sensor_")
@@ -351,16 +462,33 @@ def test_live_member_integration_uses_saved_transforms_one_extraction_and_ordere
         assert kwargs["batch_size"] == 1 and kwargs["workers"] == 0
         assert kwargs["encoder"] == "resnet18"
         calls.append(current["sample_id"].tolist())
+        extraction_precision.append(
+            (torch.backends.cudnn.allow_tf32, torch.backends.cuda.matmul.allow_tf32)
+        )
         return matrix(current), contract.copy()
 
     monkeypatch.setattr(mm, "make_features", extract_once)
     monkeypatch.setattr(Pipeline, "fit", lambda *a, **k: pytest.fail("Inference called fit"))
     loaded, provenance = blend.load_sources(neural_run, tree_run)
+    head_calls = []
+
+    def check_head_precision_and_layout(module, inputs):
+        visual, sensors = inputs
+        assert visual.is_contiguous()
+        assert sensors.is_contiguous()
+        assert visual.dtype == torch.float32 and sensors.dtype == torch.float32
+        assert not torch.backends.cudnn.allow_tf32
+        assert not torch.backends.cuda.matmul.allow_tf32
+        head_calls.append(visual.shape[0])
+
+    loaded["model"].register_forward_pre_hook(check_head_precision_and_layout)
     assert provenance["files"][str((neural_run / "best.pt").resolve())] == digest(
         neural_run / "best.pt"
     )
     original = blend.method_probabilities(frame, tmp_path, loaded, "cpu")
     assert calls == [frame["sample_id"].tolist()]
+    assert extraction_precision == [(False, False)]
+    assert head_calls == [1] * len(frame)
     with torch.inference_mode():
         expected = torch.softmax(
             model.eval()(torch.from_numpy(vectors), torch.from_numpy(prep.transform(frame))),
@@ -374,6 +502,12 @@ def test_live_member_integration_uses_saved_transforms_one_extraction_and_ordere
         subset = blend.method_probabilities(frame.iloc[positions], tmp_path, loaded, "cpu")
         for method in original:
             np.testing.assert_array_equal(subset[method], original[method][positions])
+    same_vectors_legacy_precision = blend.method_probabilities(
+        frame, tmp_path, loaded, "cpu", image_precision="cudnn_tf32"
+    )
+    assert extraction_precision[-1] == (True, False)
+    for method in original:
+        np.testing.assert_array_equal(same_vectors_legacy_precision[method], original[method])
     # Alter the current image vector while keeping this row's sensors unchanged.
     by_id["00001"] = np.zeros(512, dtype=np.float32)
     changed = blend.method_probabilities(frame.iloc[[0]], tmp_path, loaded, "cpu")

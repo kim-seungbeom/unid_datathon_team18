@@ -28,6 +28,12 @@ from experiments.seungbeom.export_submissions import (  # noqa: E402
 from experiments.seungbeom.neural_config import model_config, normalize_config  # noqa: E402
 from experiments.seungbeom.neural_data import embedding_contract  # noqa: E402
 from experiments.seungbeom.neural_sensors import NeuralSensorPreprocessor  # noqa: E402
+from experiments.seungbeom.replay_precision import (  # noqa: E402
+    POLICIES,
+    audit_cache,
+    precision_context,
+    runtime_signature,
+)
 from experiments.seungbeom.tree_candidates import template_ids  # noqa: E402
 from schema import LABELS, RAW_SENSOR_COLUMNS, read_frame  # noqa: E402
 
@@ -43,6 +49,7 @@ SOURCE_FILES = tuple(
             "experiments/seungbeom/tree_candidates.py",
             "experiments/seungbeom/export_submissions.py",
             "experiments/seungbeom/midpoint_blend.py",
+            "experiments/seungbeom/replay_precision.py",
         )
     )
 )
@@ -145,10 +152,11 @@ def load_sources(neural_run, ensemble_run):
         "preprocessor": preprocessor,
         "model": model,
         "bundle": bundle,
+        "identity": identity,
     }, provenance
 
 
-def method_probabilities(frame, image_root, loaded, device):
+def method_probabilities(frame, image_root, loaded, device, image_precision="fp32"):
     """Extract current images once; apply each member's saved preprocessing separately."""
     import torch
 
@@ -159,24 +167,31 @@ def method_probabilities(frame, image_root, loaded, device):
     target = select_device(device)
     bundle = loaded["bundle"]
     # Labels/IDs are never classifier inputs. The extractor sees only current rows.
-    features, meta = mm.make_features(
-        frame,
-        None,
-        image_root,
-        bundle["sensor_spec"],
-        encoder=bundle["encoder"],
-        embedding_spec=bundle["embedding"],
-        device=device,
-        batch_size=1,
-        workers=0,
-    )
+    # Image cache precision was not recorded by older extractors. An optional
+    # Validation-only audit can identify the matching policy; the neural head
+    # always keeps seed_everything's FP32 policy, as in the original evaluation.
+    with precision_context(image_precision):
+        features, meta = mm.make_features(
+            frame,
+            None,
+            image_root,
+            bundle["sensor_spec"],
+            encoder=bundle["encoder"],
+            embedding_spec=bundle["embedding"],
+            device=device,
+            batch_size=1,
+            workers=0,
+        )
     if list(features.columns) != bundle["columns"]:
         raise ValueError("Tree feature order differs from training.")
     if embedding_contract(meta) != embedding_contract(loaded["checkpoint"]["visual_contract"]):
         raise ValueError("Live image contract differs from the neural checkpoint.")
     image_columns = [f"{mm.EMBED_PREFIX}{i:04d}" for i in range(loaded["config"]["embedding_dim"])]
-    vectors = features.loc[:, image_columns].to_numpy(dtype=np.float32, copy=True)
-    sensors = loaded["preprocessor"].transform(frame)
+    # Match the contiguous row tensors produced by the original DataLoader.
+    vectors = np.array(features.loc[:, image_columns], dtype=np.float32, order="C", copy=True)
+    sensors = np.array(
+        loaded["preprocessor"].transform(frame), dtype=np.float32, order="C", copy=True
+    )
     model = loaded["model"].to(target).eval()
     neural_prob = []
     print("Image features ready; predicting neural and ExtraTrees members...", flush=True)
@@ -208,6 +223,8 @@ def show_metrics(metrics):
 
 
 def validate(args):
+    from runtime import seed_everything
+
     if args.output_dir.exists():
         raise ValueError("Output directory exists; choose a new output_dir.")
     loaded, provenance = load_sources(args.neural_run, args.ensemble_run)
@@ -215,12 +232,26 @@ def validate(args):
     if digest != provenance["validation_csv_sha256"] or digest == provenance["train_csv_sha256"]:
         raise ValueError("Validate requires the saved held-out Validation CSV, not Train/Test.")
     frame = read_frame(args.input, labeled=True)
+    seed_everything(loaded["config"]["seed"])
+    environment = runtime_signature(args.device)
     sources = source_hashes()
     args.output_dir.mkdir(parents=True, exist_ok=False)
     status = args.output_dir / "status.json"
     write_json(status, {"status": "running"})
     try:
-        probabilities = method_probabilities(frame, args.image_root, loaded, args.device)
+        precision_audit = None
+        image_precision = "fp32"
+        reference = getattr(args, "reference_embeddings", None)
+        if reference is not None:
+            precision_audit = audit_cache(frame, args.image_root, loaded, reference, args.device)
+            image_precision = precision_audit["image_precision"]
+            write_json(args.output_dir / "precision_audit.json", precision_audit)
+        if image_precision not in POLICIES:
+            raise ValueError("Unsupported image precision policy.")
+        print("Image precision:", image_precision, flush=True)
+        probabilities = method_probabilities(
+            frame, args.image_root, loaded, args.device, image_precision=image_precision
+        )
         metrics = {
             name: classification_metrics(frame["label"], probabilities[name].argmax(axis=1) + 1)
             for name in METHODS
@@ -244,11 +275,17 @@ def validate(args):
                 "Member Validation replay differs from saved scores; inspect before Test inference."
             )
         check_files(provenance["files"])
-        if sha256(args.input) != digest or source_hashes() != sources:
-            raise ValueError("Validation input or source code changed during evaluation.")
+        if precision_audit is not None:
+            check_files(precision_audit["reference_files"])
+        if (
+            sha256(args.input) != digest
+            or source_hashes() != sources
+            or runtime_signature(args.device) != environment
+        ):
+            raise ValueError("Validation input, source code, or runtime changed during evaluation.")
         recipe = {
             "kind": KIND,
-            "format_version": 1,
+            "format_version": 2,
             "status": "complete",
             "rule": RULE,
             "label_values": list(LABELS),
@@ -257,6 +294,9 @@ def validate(args):
             "provenance": provenance,
             "source_sha256": sources,
             "metrics": metrics,
+            "image_precision": image_precision,
+            "precision_audit": precision_audit,
+            "runtime_signature": environment,
             "weight_selection": "fixed_equal_before_validation_no_search",
         }
         write_json(args.output_dir / "recipe.json", recipe)
@@ -271,24 +311,37 @@ def validate(args):
 
 
 def predict(args):
+    from runtime import seed_everything
+
     sidecar = args.output.with_suffix(".manifest.json")
     if args.output.exists() or sidecar.exists():
         raise ValueError("Output or manifest exists; choose a new output filename.")
     recipe = read_json(args.recipe)
     if (
         recipe.get("kind") != KIND
-        or recipe.get("format_version") != 1
+        or recipe.get("format_version") != 2
         or recipe.get("status") != "complete"
         or recipe.get("rule") != RULE
         or recipe.get("label_values") != list(LABELS)
+        or recipe.get("image_precision") not in POLICIES
+        or not recipe.get("runtime_signature")
     ):
         raise ValueError("Use a completed fixed 50:50 Validation recipe.")
+    audit = recipe.get("precision_audit")
+    audited_policy = audit.get("image_precision") if isinstance(audit, dict) else "fp32"
+    if recipe["image_precision"] != audited_policy:
+        raise ValueError("Image precision differs from the Validation audit.")
     if recipe["source_sha256"] != source_hashes():
         raise ValueError("Code changed after Validation; validate again before predicting.")
     check_files(recipe["provenance"]["files"])
     loaded, provenance = load_sources(Path(recipe["neural_run"]), Path(recipe["ensemble_run"]))
     if provenance != recipe["provenance"]:
         raise ValueError("Source runs differ from the validated recipe.")
+    seed_everything(loaded["config"]["seed"])
+    if runtime_signature(args.device) != recipe["runtime_signature"]:
+        raise ValueError(
+            "Runtime differs from Validation; use the same environment or validate again."
+        )
     frame = read_frame(args.input)
     ids = frame["sample_id"].tolist()
     ordered = template_ids(args.sample_submission, ids)
@@ -297,7 +350,9 @@ def predict(args):
         "template": sha256(args.sample_submission),
         "recipe": sha256(args.recipe),
     }
-    probabilities = method_probabilities(frame, args.image_root, loaded, args.device)
+    probabilities = method_probabilities(
+        frame, args.image_root, loaded, args.device, image_precision=recipe["image_precision"]
+    )
     labels = (
         blend_probabilities(probabilities["neural"], probabilities["extra_trees"]).argmax(axis=1)
         + 1
@@ -312,6 +367,7 @@ def predict(args):
             "recipe": sha256(args.recipe),
         }
         or recipe["source_sha256"] != source_hashes()
+        or runtime_signature(args.device) != recipe["runtime_signature"]
     ):
         raise ValueError("Input, recipe, or source code changed during inference.")
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -339,6 +395,11 @@ def main(argv=None):
     for name in ("neural_run", "ensemble_run", "input", "image_root", "output_dir"):
         check.add_argument("--" + name, type=Path, required=True)
     check.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    check.add_argument(
+        "--reference_embeddings",
+        type=Path,
+        help="Optional recorded Validation cache; identify image precision by exact vector replay",
+    )
     check.set_defaults(handler=validate)
     export = commands.add_parser("predict", help="Apply the previously validated fixed recipe")
     for name in ("recipe", "input", "image_root", "sample_submission", "output"):

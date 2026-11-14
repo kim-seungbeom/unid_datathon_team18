@@ -133,6 +133,13 @@ python experiments/seungbeom/tree_candidates.py \
 기록과 일치해야 recipe를 저장합니다. 점수 일치는 개별 예측 전체의 동일성을 증명하지는
 않습니다. 이 단계는 Test를 읽지 않습니다.
 
+기존 캐시 추출과 신경망 추론은 GPU TF32 설정이 달랐을 수 있습니다. 아래의
+`--reference_embeddings`는 원래 신경망 실행에 기록된 Validation 캐시 해시를 확인하고,
+라벨과 무관하게 고른 최대 32개 현재 이미지의 벡터를 두 계산 정책으로 다시 추출합니다.
+기존 벡터를 **정확히 재현한 정책**만 선택하며, 어느 쪽도 재현하지 못하면 중단합니다.
+전체 Validation의 기존 단독 모델 점수 검사도 그대로 유지합니다. 허용 오차를 늘려서
+통과시키거나 점수가 높은 계산 정책을 선택하지 않습니다.
+
 ```bash
 cd /home/ubuntu/seungbeom/unid_datathon_team18
 source /home/ubuntu/seungbeom/venv-ensemble/bin/activate
@@ -142,21 +149,24 @@ python -u experiments/seungbeom/midpoint_blend.py validate \
   --ensemble_run runs/seungbeom/classwise_resnet18_seed42 \
   --input /home/ubuntu/data/battery_data_light/validation/validation.csv \
   --image_root /home/ubuntu/data/battery_data_light/validation \
-  --output_dir runs/seungbeom/midpoint_blend_seed42 \
+  --reference_embeddings runs/seungbeom/classwise_resnet18_seed42/embeddings/validation \
+  --output_dir runs/seungbeom/midpoint_blend_replay_seed42 \
   --device cuda
 ```
 
 `neural`, `extra_trees`, `blend_50_50` 세 줄의 Macro F1과 단계별 F1이 출력됩니다.
 조합이 더 낮아도 고정 조합 자체의 recipe는 저장하며, 좋은 결과라고 자동 판단하지 않습니다.
 개별 모델 점수가 재현되지 않으면 중단하고 원인을 확인합니다.
+이전에 실패한 `midpoint_blend_seed42` 폴더는 그대로 보관합니다.
 
 완료된 recipe로 새로운 후보 CSV를 생성합니다. 같은 서버 환경에서 연속 실행하고,
 검증과 추론 사이 코드·체크포인트를 변경하지 않습니다. 이미지 추출은 각 명령에서 한 번씩
-실행하며 해당 호출의 현재 이미지를 두 모델에 함께 사용합니다.
+전체 입력에 수행하며 두 모델이 함께 사용합니다. Validation에서는 그 전에 최대 32개
+이미지를 두 계산 정책으로 비교 추출하는 단계가 추가됩니다.
 
 ```bash
 python -u experiments/seungbeom/midpoint_blend.py predict \
-  --recipe runs/seungbeom/midpoint_blend_seed42/recipe.json \
+  --recipe runs/seungbeom/midpoint_blend_replay_seed42/recipe.json \
   --input /home/ubuntu/data/battery_data_light/test/test.csv \
   --image_root /home/ubuntu/data/battery_data_light/test \
   --sample_submission /home/ubuntu/data/battery_data_light/sample_submission.csv \
@@ -165,6 +175,10 @@ python -u experiments/seungbeom/midpoint_blend.py predict \
 ```
 
 기존 제출 파일은 유지합니다. 같은 폴더의 `.manifest.json`에는 고정 비율·사용 모델 해시·코드
-해시·Validation 비교 결과가 기록됩니다. 검증 폴더나 출력 파일이 이미 있으면 덮어쓰지
+해시·Validation 비교 결과가 기록됩니다. v2 recipe에는 재현 확인을 거친 이미지 계산 정책과
+패키지·GPU 환경도 저장하고 추론 시 확인합니다. Test 추론은 Validation 캐시를 읽지 않고
+저장된 정책으로 현재 이미지에서만 계산합니다. 신경망 분류기는 기존처럼 TF32를 끕니다.
+과거 단독 제출의 FP32 이미지 추론과 정책이 달라질 수 있으므로, 기존 Public 점수를 그대로
+재현하는 CSV라고 가정하지 않습니다. 검증 폴더나 출력 파일이 이미 있으면 덮어쓰지
 않으므로 재실행은 새 경로를 사용합니다. CSV만 사람이 리더보드에 업로드하며, 이 스크립트는
 업로드하거나 최종 파일을 선택하지 않습니다. 최종 `test.py` 연결은 후보 결정 후 별도 작업입니다.
