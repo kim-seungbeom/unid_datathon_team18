@@ -15,6 +15,7 @@ import torch
 
 from preprocessing import validate_scaling
 from sensor_features import DEFAULT_SENSOR_FEATURES, validate_feature_names, validate_imputation
+from training_objectives import validate_training_options
 
 ROOT = Path(__file__).resolve().parent
 SOURCE_FILES = (
@@ -25,6 +26,7 @@ SOURCE_FILES = (
     "preprocessing.py",
     "model.py",
     "evaluate.py",
+    "training_objectives.py",
     "runtime.py",
     "train.py",
     "test.py",
@@ -41,6 +43,10 @@ def load_config(path: str | Path) -> dict:
     config.setdefault("sensor_features", list(DEFAULT_SENSOR_FEATURES))
     config.setdefault("sensor_imputation", "median")
     config.setdefault("sensor_scaling", "standard")
+    config.setdefault("loss", "cross_entropy")
+    config.setdefault("sampling", "shuffle")
+    config.setdefault("class_weight_power", 0.5)
+    config.setdefault("focal_gamma", 2.0)
     positive_ints = ("image_size", "batch_size", "epochs", "sensor_hidden", "fusion_hidden")
     expected = set(positive_ints) | {
         "seed",
@@ -52,6 +58,10 @@ def load_config(path: str | Path) -> dict:
         "sensor_features",
         "sensor_imputation",
         "sensor_scaling",
+        "loss",
+        "sampling",
+        "class_weight_power",
+        "focal_gamma",
     }
     if set(config) != expected:
         raise ValueError("Config contains missing or unsupported keys.")
@@ -75,6 +85,7 @@ def load_config(path: str | Path) -> dict:
     config["sensor_features"] = list(validate_feature_names(config["sensor_features"]))
     validate_imputation(config["sensor_imputation"])
     validate_scaling(config["sensor_scaling"])
+    validate_training_options(config)
     return config
 
 

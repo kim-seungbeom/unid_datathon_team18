@@ -6,7 +6,6 @@ import shutil
 from pathlib import Path
 
 import torch
-from torch import nn
 from torch.utils.data import DataLoader
 
 from dataset import BatteryDataset
@@ -24,6 +23,7 @@ from runtime import (
     write_json,
 )
 from schema import LABELS, read_frame, validate_split
+from training_objectives import build_training_components
 
 
 def main() -> None:
@@ -90,10 +90,15 @@ def main() -> None:
     val_data = BatteryDataset(
         val_frame, val_image_root, preprocessor, config["image_size"], use_images=use_images
     )
+    # Compute causal features on the original split before drawing any repeated indices.
+    loss_function, train_sampler, objective_metadata = build_training_components(
+        train_frame["label"], config, device
+    )
     loader_options = {"batch_size": config["batch_size"], "num_workers": config["num_workers"]}
     train_loader = DataLoader(
         train_data,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         generator=torch.Generator().manual_seed(config["seed"]),
         **loader_options,
     )
@@ -101,9 +106,9 @@ def main() -> None:
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"]
     )
-    loss_function = nn.CrossEntropyLoss()
     write_json(args.run_dir / "config.json", config)
     write_json(args.run_dir / "preprocessing.json", preprocessor.to_dict())
+    write_json(args.run_dir / "training_objective.json", objective_metadata)
     write_json(args.run_dir / "environment.json", environment_metadata(device))
     write_json(
         args.run_dir / "split.json",
@@ -160,6 +165,7 @@ def main() -> None:
                 "seed": config["seed"],
                 "label_values": list(LABELS),
                 "epoch": epoch,
+                "training_objective": objective_metadata,
             }
             temporary = args.run_dir / "best.pt.tmp"
             torch.save(checkpoint, temporary)

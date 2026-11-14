@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from scripts.compare_runs import comparison_rows
+from evaluate import classification_metrics
+from scripts.compare_runs import class_detail_rows, comparison_rows
 
 
 def test_comparison_checks_identical_splits(tmp_path):
@@ -27,6 +28,7 @@ def test_comparison_checks_identical_splits(tmp_path):
             (directory / name).write_text(json.dumps(content))
     rows = comparison_rows(directories)
     assert len(rows) == 2 and rows[0]["macro_f1"] == "0.250000"
+    assert rows[0]["loss"] == "cross_entropy" and rows[0]["sampling"] == "shuffle"
     (directories[1] / "split.json").write_text(
         json.dumps(
             {
@@ -37,3 +39,28 @@ def test_comparison_checks_identical_splits(tmp_path):
     )
     with pytest.raises(ValueError, match="splits differ"):
         comparison_rows(directories)
+
+
+def test_precision_recall_and_legacy_confusion_details(tmp_path):
+    metrics = classification_metrics([1, 1, 1, 2], [1, 2, 2, 2])
+    assert metrics["class_precision"]["1"] == 1
+    assert metrics["class_recall"]["1"] == pytest.approx(1 / 3)
+    assert metrics["class_precision"]["2"] == pytest.approx(1 / 3)
+    assert metrics["class_recall"]["2"] == 1
+    assert metrics["class_precision"]["3"] == metrics["class_recall"]["3"] == 0
+    # Legacy files contain the matrix but no saved precision/recall dictionaries.
+    (tmp_path / "best_metrics.json").write_text(
+        json.dumps({"confusion_matrix": metrics["confusion_matrix"]})
+    )
+    rows = class_detail_rows([tmp_path])
+    assert rows[0]["precision"] == "1.000000" and rows[0]["recall"] == "0.333333"
+    assert rows[0]["f1"] == "0.500000" and rows[0]["support"] == 3
+    assert rows[1]["precision"] == "0.333333" and rows[1]["recall"] == "1.000000"
+    assert rows[2]["precision"] == rows[2]["recall"] == rows[2]["f1"] == "0.000000"
+
+
+@pytest.mark.parametrize("matrix", [[[1]], [[-1] * 6] * 6, [[0.5] * 6] * 6])
+def test_invalid_class_details_are_rejected(tmp_path, matrix):
+    (tmp_path / "best_metrics.json").write_text(json.dumps({"confusion_matrix": matrix}))
+    with pytest.raises(ValueError, match="confusion matrix"):
+        class_detail_rows([tmp_path])

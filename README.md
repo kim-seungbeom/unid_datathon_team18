@@ -24,6 +24,7 @@
 | `sensor_features.py` | 원본 컬럼과 분리된 현재·과거 센서 피처 생성·이름 검증 |
 | `temporal.py` | 실험별 시간 정렬, 과거 유효값 대체, 초 기준 평균·변화량 |
 | `evaluate.py`, `runtime.py` | 6클래스 평가, 재현 설정, 메타데이터 기록 |
+| `training_objectives.py` | Train 빈도 기반 가중 손실·Focal Loss·균형 샘플링 |
 | `configs/baseline.json` | 모델·학습 설정 |
 | `configs/sensor_*.json`, `configs/fusion_temperature.json` | 센서 단독 및 온도 파생 피처 비교 설정 |
 | `check_submission.py` | 팀 자체 제출 재현·부분 입력 검사 도구 |
@@ -36,7 +37,9 @@
 | `docs/sensor_experiments.md` | 센서 담당의 피처 확장·단독 실험·서버 비교 순서 |
 | `docs/temporal_sensor_experiments.md` | 직전값 대체와 전압·전류·압력 과거 피처의 분리 실험 |
 | `docs/sensor_ablation_experiments.md` | 센서별 과거 피처·가스·주변 온도·열화상 수치·결측 표시·Robust 비교 |
+| `docs/seed_and_imbalance_experiments.md` | seed 43·44 반복과 취약 클래스의 손실·샘플링 비교 |
 | `scripts/compare_runs.py` | 동일 Train·Validation을 사용한 실험의 검증 지표 비교 |
+| `scripts/summarize_seeds.py` | 같은 설정의 seed별 평균·표준편차 및 대응 비교 |
 | `scripts/sensor_eda.py`, `docs/sensor_eda.md` | 사용자가 서버에서 확인하는 센서 분포 요약·그래프 |
 | `docs/SESSION_HANDOFF.md` | 다른 세션에 전달할 파일 구조·서버 상태·진행 단계 |
 
@@ -105,8 +108,8 @@ python -m pytest tests
 코드 스타일 검사도 데이터 폴더를 탐색하지 않도록 코드 경로를 명시합니다.
 
 ```bash
-python -m ruff check schema.py sensor_features.py temporal.py dataset.py preprocessing.py model.py evaluate.py runtime.py train.py test.py check_submission.py scripts tests
-python -m ruff format --check schema.py sensor_features.py temporal.py dataset.py preprocessing.py model.py evaluate.py runtime.py train.py test.py check_submission.py scripts tests
+python -m ruff check schema.py sensor_features.py temporal.py dataset.py preprocessing.py model.py evaluate.py training_objectives.py runtime.py train.py test.py check_submission.py scripts tests
+python -m ruff format --check schema.py sensor_features.py temporal.py dataset.py preprocessing.py model.py evaluate.py training_objectives.py runtime.py train.py test.py check_submission.py scripts tests
 ```
 
 ## GPU 서버 환경 확인
@@ -186,11 +189,14 @@ python check_submission.py \
 - **전처리:** 기본 `median`은 피처별 Train 중앙값 대체입니다. `forward_fill`은 같은 실험의 원본 센서를 과거 유효값으로 먼저 채운 뒤 피처를 계산하며, 과거가 없으면 Train 중앙값을 사용합니다. `sensor_scaling=standard`는 대체한 Train의 평균·표준편차, `robust`는 중앙값·IQR을 사용합니다. 모두 결측인 열의 대체값은 0, 매우 작은 스케일은 1로 처리합니다. 선택한 결측 표시는 대체 전 상태를 기록하고 모델 입력에서도 0·1을 유지합니다. 피처·대체·스케일링 방식과 통계를 저장하여 Validation·Test에 그대로 적용하며 이상값을 삭제하지 않습니다.
 - **결합:** 기본 `mode=multimodal`은 이미지 특징과 센서 MLP 출력을 연결한 뒤 6개 logits를 출력합니다. `mode=sensor_only`는 이미지를 읽지 않는 센서 분석용 비교 실험이며 최종 제출 모델로 사용하지 않습니다. 내부 타깃은 `0..5`, 제출 때만 `1..6`으로 변환합니다.
 - **검증:** Train만 모델·전처리를 학습하고 제공 Validation의 6클래스 Macro F1으로 최적 epoch를 선택합니다. 두 분할의 sample ID·experiment ID 중복은 오류로 처리합니다. 자체 CV와 Train+Validation 최종 재학습은 현재 구현하지 않았습니다.
+- **불균형 비교:** 기본은 일반 cross entropy와 shuffled loader입니다. 선택적으로 Train 빈도의 역제곱근 가중 CE, 가중치 없는 softmax Focal Loss, Train 역빈도 균형 샘플링을 하나씩 비교합니다. 인과적 피처를 원래 Train에서 계산한 뒤 인덱스를 샘플링하며 Validation·Test 분포는 바꾸지 않습니다. `training_objective.json`에 적용 방식과 Train 집계를 저장합니다. `--class_details` 비교 옵션으로 기존 confusion matrix에서도 precision·recall을 확인할 수 있습니다.
 - **시계열:** 기존 설정은 현재 행만 사용합니다. `sensor_ffill_raw.json`은 같은 실험의 직전 유효값으로 결측을 채우며, `sensor_history_median.json`과 `sensor_ffill_history.json`은 전압·전류·압력의 과거 30초 평균·변화량도 사용합니다. 미래 관측·실험 전체 통계·다른 실험 관측은 사용하지 않습니다. 식별자는 그룹 구분에만 사용합니다.
 - **추론 일관성:** `eval()`, inference mode, 시드 및 결정적 연산 설정을 사용합니다. 모델 forward는 한 샘플씩 수행하므로 `--batch_size`는 로딩에만 적용됩니다. 처리 속도보다 부분 입력·배치 구성 일관성을 우선한 초기 구현입니다.
 - **사전학습:** 사용하지 않습니다. 외부 데이터나 외부 추론 API도 사용하지 않습니다.
 
 센서 담당의 초기 실행은 [센서 실험 안내](docs/sensor_experiments.md), 과거 기반 구현은 [시계열 실험 안내](docs/temporal_sensor_experiments.md), 최신 비교 설정은 [센서별 분리 실험 안내](docs/sensor_ablation_experiments.md)를 따릅니다. 새 가중치·전처리는 피처·대체 방식·과거 계산 버전·스케일링을 포함하는 v4로 저장하고, 기존 v1·v2·v3도 읽습니다. 제출 코드에는 `sensor_features.py`와 `temporal.py`를 함께 포함해야 합니다.
+
+후속 [반복 seed·불균형 실험 안내](docs/seed_and_imbalance_experiments.md)는 원본·전압 이력의 seed 43·44와 독립적인 손실·sampling 후보를 제공합니다. 새 코드 패키지에는 `training_objectives.py`도 포함합니다. `summarize_seeds.py`의 평균·표본 표준편차는 학습 seed의 변동을 나타내며, 신뢰구간이나 새로운 검증 분할에 대한 성능 보장은 아닙니다.
 
 CPU와 CUDA, 서로 다른 버전·장치 간 결과까지 동일하다고 보장할 수는 없습니다. 최종 가중치와 함께 실제 서버 환경을 기록하고 동일 환경에서 최종 파일 재현 검사를 수행하세요. [PyTorch 재현성 안내](https://docs.pytorch.org/docs/2.7/notes/randomness.html)를 기준으로 난수와 결정적 연산을 설정했습니다.
 

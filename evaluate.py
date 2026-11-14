@@ -13,11 +13,17 @@ def classification_metrics(y_true, y_pred) -> dict:
     matrix = np.zeros((len(LABELS), len(LABELS)), dtype=np.int64)
     np.add.at(matrix, (true - 1, pred - 1), 1)
     tp = np.diag(matrix)
-    denominator = matrix.sum(axis=0) + matrix.sum(axis=1)
+    predicted = matrix.sum(axis=0)
+    support = matrix.sum(axis=1)
+    denominator = predicted + support
     f1 = np.divide(2.0 * tp, denominator, out=np.zeros(6), where=denominator != 0)
+    precision = np.divide(tp, predicted, out=np.zeros(6), where=predicted != 0)
+    recall = np.divide(tp, support, out=np.zeros(6), where=support != 0)
     return {
         "macro_f1": float(f1.mean()),
         "class_f1": {str(label): float(f1[label - 1]) for label in LABELS},
+        "class_precision": {str(label): float(precision[label - 1]) for label in LABELS},
+        "class_recall": {str(label): float(recall[label - 1]) for label in LABELS},
         "support": {str(label): int(matrix[label - 1].sum()) for label in LABELS},
         "confusion_matrix": matrix.tolist(),
     }
