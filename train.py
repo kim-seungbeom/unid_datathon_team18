@@ -6,7 +6,6 @@ import shutil
 from pathlib import Path
 
 import torch
-from torch import nn
 from torch.utils.data import DataLoader
 
 from dataset import BatteryDataset
@@ -24,6 +23,7 @@ from runtime import (
     write_json,
 )
 from schema import LABELS, read_frame, validate_split
+from training_objectives import build_training_components
 
 
 def main() -> None:
@@ -59,23 +59,46 @@ def main() -> None:
         parser.error("model_out already exists. Choose a new path to preserve previous weights.")
 
     config = load_config(args.config)
+    use_images = config["mode"] == "multimodal"
+    if not use_images:
+        print(
+            "Sensor-only ablation: validation research only; final model must use both modalities."
+        )
     seed_everything(config["seed"])
     device = select_device(args.device)
-    train_frame = read_frame(args.train_csv, labeled=True)
-    val_frame = read_frame(args.val_csv, labeled=True)
+    train_frame = read_frame(args.train_csv, labeled=True, require_images=use_images)
+    val_frame = read_frame(args.val_csv, labeled=True, require_images=use_images)
     validate_split(train_frame, val_frame)
+    preprocessor = SensorPreprocessor.fit(
+        train_frame,
+        config["sensor_features"],
+        imputation=config["sensor_imputation"],
+        scaling=config["sensor_scaling"],
+    )
     args.run_dir.mkdir(parents=True, exist_ok=False)
-    preprocessor = SensorPreprocessor.fit(train_frame)
     model_config = {key: config[key] for key in ("sensor_hidden", "fusion_hidden", "dropout")}
+    model_config.update(sensor_input_dim=preprocessor.input_dim, mode=config["mode"])
     model = FusionClassifier(**model_config).to(device)
     train_data = BatteryDataset(
-        train_frame, train_image_root, preprocessor, config["image_size"], labeled=True
+        train_frame,
+        train_image_root,
+        preprocessor,
+        config["image_size"],
+        labeled=True,
+        use_images=use_images,
     )
-    val_data = BatteryDataset(val_frame, val_image_root, preprocessor, config["image_size"])
+    val_data = BatteryDataset(
+        val_frame, val_image_root, preprocessor, config["image_size"], use_images=use_images
+    )
+    # Compute causal features on the original split before drawing any repeated indices.
+    loss_function, train_sampler, objective_metadata = build_training_components(
+        train_frame["label"], config, device
+    )
     loader_options = {"batch_size": config["batch_size"], "num_workers": config["num_workers"]}
     train_loader = DataLoader(
         train_data,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         generator=torch.Generator().manual_seed(config["seed"]),
         **loader_options,
     )
@@ -83,9 +106,9 @@ def main() -> None:
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"]
     )
-    loss_function = nn.CrossEntropyLoss()
     write_json(args.run_dir / "config.json", config)
     write_json(args.run_dir / "preprocessing.json", preprocessor.to_dict())
+    write_json(args.run_dir / "training_objective.json", objective_metadata)
     write_json(args.run_dir / "environment.json", environment_metadata(device))
     write_json(
         args.run_dir / "split.json",
@@ -98,7 +121,13 @@ def main() -> None:
             "shared_experiments_present": bool(
                 set(train_frame["experiment_id"]) & set(val_frame["experiment_id"])
             ),
-            "features": "current image and five current sensors only",
+            "mode": config["mode"],
+            "sensor_features": list(preprocessor.feature_names),
+            "uses_images": use_images,
+            "sensor_imputation": preprocessor.imputation,
+            "sensor_scaling": preprocessor.scaling,
+            "uses_history": preprocessor.uses_history,
+            "features": "same-experiment current/past only; no targets or future observations",
         },
     )
     history = []
@@ -108,7 +137,8 @@ def main() -> None:
         total_loss = 0.0
         for batch in train_loader:
             optimizer.zero_grad(set_to_none=True)
-            logits = model(batch["images"].to(device), batch["sensors"].to(device))
+            images = batch["images"].to(device) if use_images else None
+            logits = model(images, batch["sensors"].to(device))
             loss = loss_function(logits, batch["targets"].to(device))
             if not torch.isfinite(loss):
                 raise ValueError("Training loss is nonfinite.")
@@ -125,7 +155,7 @@ def main() -> None:
         if metrics["macro_f1"] > best_score:
             best_score = metrics["macro_f1"]
             checkpoint = {
-                "format_version": 1,
+                "format_version": 4,
                 "state_dict": {
                     key: value.detach().cpu() for key, value in model.state_dict().items()
                 },
@@ -135,6 +165,7 @@ def main() -> None:
                 "seed": config["seed"],
                 "label_values": list(LABELS),
                 "epoch": epoch,
+                "training_objective": objective_metadata,
             }
             temporary = args.run_dir / "best.pt.tmp"
             torch.save(checkpoint, temporary)

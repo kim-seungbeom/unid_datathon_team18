@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | Python 환경 | `/home/ubuntu/venv` | 팀 공용 |
 | 대회 데이터 | `/home/ubuntu/data/battery_data_light` | 팀 공용, 개인 폴더로 복사하지 않음 |
-| 운영진 원본 | `/home/ubuntu/data/baseline/uni_d_baseline_v7` | 팀 공용 원본 |
+| 운영진 원본 | `/home/ubuntu/data/baseline` 아래 | 팀 공용 원본, 압축 내부 폴더명은 배포에 따라 다를 수 있음 |
 | 실행 코드 | `/home/ubuntu/<본인이름>/unid_datathon_team18` | 각자 clone하고 본인 브랜치만 동기화 |
 | 실험 결과·예측·가중치 | 본인 레포 안의 `runs/`, `outputs/`, `weights/` | 개인별 저장, Git 제외 |
 
@@ -42,6 +42,8 @@ bash scripts/setup_env.sh --server
 ```
 
 이 명령은 공용 경로·패키지·CUDA를 확인만 합니다. NumPy·pandas·Pillow가 없을 때만 팀과 설치를 조율한 뒤 아래 명령을 실행하고 다시 확인하세요.
+
+공식 `setup.sh` 파일을 어디에 두었는지는 설치 경로와 별개입니다. 기본 설치 경로는 `/home/ubuntu/data`이며, 팀 모델은 운영진 베이스라인 원본 폴더가 없어도 실행할 수 있습니다. 이전 코드에서 `Organizer baseline directory not found.`로 중단되면, 배포 폴더가 있는 경우 `PROJECT_BASELINE_ROOT=/home/ubuntu/data/baseline bash scripts/setup_env.sh --server`로 나머지 환경 검사를 진행할 수 있습니다.
 
 ```bash
 python -m pip install -r requirements-common.txt

@@ -13,13 +13,20 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from preprocessing import validate_scaling
+from sensor_features import DEFAULT_SENSOR_FEATURES, validate_feature_names, validate_imputation
+from training_objectives import validate_training_options
+
 ROOT = Path(__file__).resolve().parent
 SOURCE_FILES = (
     "schema.py",
+    "sensor_features.py",
+    "temporal.py",
     "dataset.py",
     "preprocessing.py",
     "model.py",
     "evaluate.py",
+    "training_objectives.py",
     "runtime.py",
     "train.py",
     "test.py",
@@ -29,6 +36,17 @@ SOURCE_FILES = (
 def load_config(path: str | Path) -> dict:
     with Path(path).open(encoding="utf-8") as handle:
         config = json.load(handle)
+    if not isinstance(config, dict):
+        raise ValueError("Config must be a JSON object.")
+    # Preserve existing raw-sensor multimodal configs.
+    config.setdefault("mode", "multimodal")
+    config.setdefault("sensor_features", list(DEFAULT_SENSOR_FEATURES))
+    config.setdefault("sensor_imputation", "median")
+    config.setdefault("sensor_scaling", "standard")
+    config.setdefault("loss", "cross_entropy")
+    config.setdefault("sampling", "shuffle")
+    config.setdefault("class_weight_power", 0.5)
+    config.setdefault("focal_gamma", 2.0)
     positive_ints = ("image_size", "batch_size", "epochs", "sensor_hidden", "fusion_hidden")
     expected = set(positive_ints) | {
         "seed",
@@ -36,9 +54,17 @@ def load_config(path: str | Path) -> dict:
         "weight_decay",
         "num_workers",
         "dropout",
+        "mode",
+        "sensor_features",
+        "sensor_imputation",
+        "sensor_scaling",
+        "loss",
+        "sampling",
+        "class_weight_power",
+        "focal_gamma",
     }
     if set(config) != expected:
-        raise ValueError("Config keys must match configs/baseline.json exactly.")
+        raise ValueError("Config contains missing or unsupported keys.")
     for key in positive_ints:
         if type(config[key]) is not int or config[key] <= 0:
             raise ValueError(f"{key} must be a positive integer.")
@@ -54,6 +80,12 @@ def load_config(path: str | Path) -> dict:
         raise ValueError("Invalid learning rate or weight decay.")
     if not 0 <= config["dropout"] < 1:
         raise ValueError("dropout must be in [0, 1).")
+    if config["mode"] not in ("multimodal", "sensor_only"):
+        raise ValueError("mode must be multimodal or sensor_only.")
+    config["sensor_features"] = list(validate_feature_names(config["sensor_features"]))
+    validate_imputation(config["sensor_imputation"])
+    validate_scaling(config["sensor_scaling"])
+    validate_training_options(config)
     return config
 
 
@@ -86,8 +118,8 @@ def predict_labels(model, loader, device: torch.device) -> np.ndarray:
     for batch in loader:
         # A fixed single-row forward pass avoids batch-size dependent floating-point paths.
         # batch_size controls image loading only. Optimize only after invariance tests pass.
-        for index in range(len(batch["images"])):
-            images = batch["images"][index : index + 1].to(device)
+        for index in range(len(batch["sensors"])):
+            images = batch["images"][index : index + 1].to(device) if "images" in batch else None
             sensors = batch["sensors"][index : index + 1].to(device)
             logits = model(images, sensors)
             if not torch.isfinite(logits).all():

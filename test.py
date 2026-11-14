@@ -32,17 +32,25 @@ def main() -> None:
         parser.error("Checkpoint is missing. Supply --checkpoint or prepare weights/model.pt.")
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    if checkpoint.get("format_version") != 1 or checkpoint.get("label_values") != list(LABELS):
+    if checkpoint.get("format_version") not in (1, 2, 3, 4) or checkpoint.get(
+        "label_values"
+    ) != list(LABELS):
         raise ValueError("Unsupported checkpoint format or class mapping.")
     seed_everything(checkpoint["seed"])
     device = select_device(args.device)
-    frame = read_frame(args.input)
     preprocessor = SensorPreprocessor.from_dict(checkpoint["preprocessor"])
-    dataset = BatteryDataset(frame, args.image_root, preprocessor, checkpoint["image_size"])
+    model = FusionClassifier(**checkpoint["model_config"])
+    if model.sensor_input_dim != preprocessor.input_dim:
+        raise ValueError("Saved model dimension does not match saved sensor features.")
+    if not model.uses_images:
+        print("Sensor-only ablation predictions; not a final multimodal competition submission.")
+    frame = read_frame(args.input, require_images=model.uses_images)
+    dataset = BatteryDataset(
+        frame, args.image_root, preprocessor, checkpoint["image_size"], use_images=model.uses_images
+    )
     loader = DataLoader(
         dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False
     )
-    model = FusionClassifier(**checkpoint["model_config"])
     model.load_state_dict(checkpoint["state_dict"], strict=True)
     model.to(device)
     labels = validate_labels(predict_labels(model, loader, device))
