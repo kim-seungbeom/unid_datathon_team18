@@ -109,3 +109,72 @@ python -u experiments/seungbeom/group_cv.py run \
 완료된 fold는 파일 해시와 OOF 지표 재현을 확인하고 재사용한다. 중간에 끊긴 fold는
 새 attempt 폴더에서 처음부터 재학습한다. epoch 중간 복원은 지원하지 않는다.
 같은 출력 폴더로 두 작업을 동시에 실행하지 않는다.
+
+## 완료한 3-fold ExtraTrees를 제출 후보로 추출
+
+별도 `group_cv_export.py`가 각 fold ExtraTrees의 확률을 1/3씩 평균한다.
+신경망과는 섞지 않으며 재학습이나 혼합 가중치 탐색도 하지 않는다.
+기존 `group_cv.py`와 학습 소스는 수정하지 않아 완료된 CV의 해시를 유지한다.
+
+서버의 같은 브랜치를 pull하고 개인 `venv-ensemble`을 활성화한 뒤 실행한다.
+이미지 추출이 있으므로 tmux에서 실행해도 된다.
+먼저 공식 Validation에서 기존 neural / ExtraTrees / 50:50의 지표 재현을 확인하고,
+같은 이미지 특징으로 세 fold와 확률 평균의 성능을 비교한다.
+
+```bash
+set -o pipefail
+LOKY_MAX_CPU_COUNT=4 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+python -u experiments/seungbeom/group_cv_export.py compare \
+  --recipe runs/seungbeom/midpoint_blend_replay_seed42/recipe.json \
+  --cv_dir runs/seungbeom/group_cv_raw_seed42 \
+  --input /home/ubuntu/data/battery_data_light/validation/validation.csv \
+  --image_root /home/ubuntu/data/battery_data_light/validation \
+  --output_dir runs/seungbeom/cv3_extratrees_validation \
+  --device cuda \
+  2>&1 | tee runs/seungbeom/cv3_extratrees_validation.log
+```
+
+`extra_trees_cv3`가 새 후보다. 원래 OOF는 각 행을 학습하지 않은 한 fold 모델의
+예측을 모은 결과이고, 이 Validation 결과는 세 모델의 확률을 평균한 결과다.
+서로 다른 지표이므로 OOF 점수를 제출 후보의 Validation 점수로 적지 않는다.
+원본 지표 재현에 실패하면 recipe를 만들지 않고 중단한다.
+
+완료 후 같은 세 모델을 Test 입력에 적용한다.
+
+```bash
+LOKY_MAX_CPU_COUNT=4 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+python -u experiments/seungbeom/group_cv_export.py predict \
+  --recipe runs/seungbeom/cv3_extratrees_validation/recipe.json \
+  --input /home/ubuntu/data/battery_data_light/test/test.csv \
+  --image_root /home/ubuntu/data/battery_data_light/test \
+  --sample_submission /home/ubuntu/data/battery_data_light/sample_submission.csv \
+  --output_dir runs/seungbeom/submissions_cv3_extratrees \
+  --device cuda \
+  2>&1 | tee runs/seungbeom/submissions_cv3_extratrees.log
+```
+
+제출 파일:
+
+```text
+/home/ubuntu/seungbeom/unid_datathon_team18/runs/seungbeom/submissions_cv3_extratrees/submission_extratrees_cv3.csv
+```
+
+VS Code Remote 탐색기에서 해당 파일을 우클릭하여 다운로드한 뒤 제출한다.
+메모 예시: `고정 ResNet18 이미지 벡터 + 원본 센서 5개, Train 실험 단위 3-fold ExtraTrees 확률 균등 평균.`
+기존 최고점 50:50 파일을 보관하고 새 후보로 비교한다.
+
+저장된 Validation 비교표만 다시 보기:
+
+```bash
+python experiments/seungbeom/group_cv_export.py report \
+  --recipe runs/seungbeom/cv3_extratrees_validation/recipe.json
+```
+
+추론은 CV의 세 tree 파일과 학습 메타데이터, export 소스 및 비교 recipe의 해시를
+검사한다. Train/Validation CSV·캐시·OOF 예측이나 원래 신경망 가중치는 추론 때
+열지 않는다. 입력 행의 이미지와 센서로만 예측하며, 별도 부분 입력 검사에서는
+`--sample_submission`을 생략하면 입력 행 순서로 저장한다. 템플릿을 지정하면
+입력과 템플릿의 ID 집합이 정확히 같아야 한다.
+
+compare/predict 모두 출력 폴더가 이미 있으면 덮어쓰지 않는다. 실패 후 재실행할
+때는 새로운 출력 폴더명을 사용하고, predict의 recipe 경로도 실제 비교 폴더에 맞춘다.
