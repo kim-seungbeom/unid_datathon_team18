@@ -37,6 +37,9 @@ python -u experiments/seungbeom/extratrees_leaf_audit.py \
 통과해도 모든 live-image 개별 확률의 동일성을 입증한 것은 아니다. 진단 파일은
 `audit.json`이며, 완료 recipe나 제출 CSV가 아니다. 이 결과를 확인한 뒤 복구 방법을 정한다.
 
+PCA·트리 상태 차이가 확인됐다면 [별도 모델로 구분해 복구하는 절차](EXTRATREES_LEAF_RECOVERY.md)를
+사용한다. 원래 모델과 재학습 leaf 2를 각각 표시하고 기존 확률 완전 일치 검사를 수정하지 않는다.
+
 ## 1. 서버에서 코드 받기
 
 같은 clone에서 실행 중인 학습/추론이 끝난 후:
