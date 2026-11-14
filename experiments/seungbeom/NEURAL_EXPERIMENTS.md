@@ -136,6 +136,76 @@ PY
 | `seeds` | 동일 후보를 seed 42, 43, 44로 반복 | 기본 3 |
 | `temporal` | 원본 / 전압 30초 / 압력 30초 / 온도 변화율 / 결합 | 5 |
 | `pretrained` | 고정 사전학습 ResNet18 / ConvNeXt-Tiny / DINOv2-Small | 3 |
+| `ambient` | 원본 5개 / 주변 온도 추가 / 주변 대비 온도차 2개까지 추가 | 3 |
+
+### 주변 온도 비교: 원본 정보와 차이 표현을 분리
+
+현재 서버 clone에서 진행 중인 학습·추론이 모두 끝난 뒤 같은 브랜치를 pull합니다.
+이번 비교는 기존 ResNet18 벡터·concat·seed 42·학습 설정을 그대로 유지하고 센서 입력만
+바꿉니다. 과거 피처는 포함하지 않습니다. 원본 대조군도 새 결과 폴더에서 다시 학습합니다.
+
+| `sensors` 표시 | 센서 입력 수 | 입력 |
+| --- | --- | --- |
+| `raw` | 5 | `meas_v`, `meas_a`, `meas_t1`, `meas_t2`, `meas_p` |
+| `ambient` | 6 | 원본 5개 + `atmp_t` |
+| `ambient_delta` | 8 | 위 6개 + `temp1_minus_ambient`, `temp2_minus_ambient` |
+
+두 파생값은 같은 행의 `meas_t1 - atmp_t`, `meas_t2 - atmp_t`입니다. 부호를 유지하며
+절댓값이나 고정 임계값을 사용하지 않습니다. 새 원본 센서는 `atmp_t` 하나이고,
+차이 두 개는 이미 있는 정보의 다른 표현입니다. 따라서 `ambient - raw`는 주변 온도
+추가 효과, `ambient_delta - ambient`는 차이 표현을 명시적으로 제공한 효과를 봅니다.
+온도차 표현만으로 성능 향상을 보장하지 않습니다.
+
+유효하지 않은 숫자·무한대는 결측으로 처리합니다. 차이에 필요한 값이 결측이면 차이도
+결측으로 두고 **Train에서 구한 각 피처의 중앙값**으로 채운 다음 Train 평균·표준편차로
+표준화합니다. 원본 값을 먼저 중앙값으로 채운 뒤 차이를 계산하는 방식은 아닙니다.
+Validation·추론에서는 저장된 전처리를 그대로 적용합니다. `atmp_t` 열이 없으면 오류로
+중단하며, 몰래 0으로 열을 만들지 않습니다. 열은 있지만 Train에서 모두 결측이면 기존
+공통 전처리의 0 대체 규칙을 적용합니다. 이는 유용한 환경 정보가 추가됐다는 뜻이 아닙니다.
+
+서버에서 아래 순서로 실행합니다. 추가 패키지는 필요하지 않습니다.
+
+```bash
+cd /home/ubuntu/seungbeom/unid_datathon_team18
+git fetch origin
+git switch feat/seungbeom-multimodal-tuning
+git pull --ff-only origin feat/seungbeom-multimodal-tuning
+tmux new-session -A -s seungbeom-ambient
+```
+
+새 tmux 터미널에서:
+
+```bash
+cd /home/ubuntu/seungbeom/unid_datathon_team18
+source /home/ubuntu/seungbeom/venv-ensemble/bin/activate
+
+python experiments/seungbeom/neural_sweep.py plan \
+  --stage ambient --max_trials 3 \
+  --base_config runs/seungbeom/neural_fusion_seed42/embedding_concat_s42_3daac9bb72d0ba69/config.json \
+  --output runs/seungbeom/neural_plans/ambient_seed42.json
+
+python -u experiments/seungbeom/neural_sweep.py run \
+  --plan runs/seungbeom/neural_plans/ambient_seed42.json \
+  --data_dir /home/ubuntu/data/battery_data_light \
+  --run_root runs/seungbeom/neural_ambient_seed42 \
+  --train_embeddings runs/seungbeom/classwise_resnet18_seed42/embeddings/train \
+  --val_embeddings runs/seungbeom/classwise_resnet18_seed42/embeddings/validation \
+  --device cuda
+
+python experiments/seungbeom/neural_sweep.py compare \
+  --plan runs/seungbeom/neural_plans/ambient_seed42.json \
+  --run_root runs/seungbeom/neural_ambient_seed42 \
+  --compact --class_details \
+  | tee runs/seungbeom/neural_ambient_seed42/comparison.txt
+```
+
+계획은 기존 파일을 덮어쓰지 않습니다. 같은 계획으로 실행만 이어갈 때는 `plan`을 생략하고
+`run`부터 실행합니다. 완료·동일 설정 결과만 재사용하며 실패한 실행은 새로운 run_root가
+필요합니다. 기존 이미지 벡터만 재사용하고 세 분류 신경망은 자동으로 순차 학습합니다.
+`compare`의 `Completed runs: 3/3`을 확인하고 전체 Macro F1과 단계별 F1을 함께 봅니다.
+화면이 잘리면 `less -S runs/seungbeom/neural_ambient_seed42/comparison.txt`로 열고
+좌우 화살표로 이동하며 `q`로 종료합니다. seed 하나의 차이는 재현되는 개선으로 확정하지
+않고, 유망한 조건만 후속 seed·실험 그룹 검증으로 확인합니다.
 
 ### 다음 실행: 사전학습 이미지 인코더 비교
 

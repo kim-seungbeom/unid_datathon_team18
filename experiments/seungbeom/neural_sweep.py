@@ -20,7 +20,11 @@ from experiments.seungbeom.neural_config import (  # noqa: E402
     load_config,
     normalize_config,
 )
-from experiments.seungbeom.neural_sensors import TEMPORAL_VARIANTS, sensor_variant  # noqa: E402
+from experiments.seungbeom.neural_sensors import (  # noqa: E402
+    AMBIENT_VARIANTS,
+    TEMPORAL_VARIANTS,
+    sensor_variant,
+)
 
 STAGES = (
     "lr",
@@ -31,6 +35,7 @@ STAGES = (
     "seeds",
     "temporal",
     "pretrained",
+    "ambient",
 )
 
 
@@ -56,6 +61,8 @@ def write_json(path, value, *, exclusive=False):
 
 
 def _variations(stage, seeds, include_focal):
+    if stage == "ambient":
+        return [{"sensor_features": list(names)} for names in AMBIENT_VARIANTS.values()]
     if stage == "pretrained":
         return [
             {"embedding_encoder": name, "embedding_dim": EMBEDDING_DIMENSIONS[name]}

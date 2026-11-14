@@ -27,6 +27,16 @@ TEMPORAL_VARIANTS = {
     "temperature30": (*RAW_SENSOR_COLUMNS, *SLOPE_SOURCES),
     "combined30": (*RAW_SENSOR_COLUMNS, *VOLTAGE_FEATURES, *PRESSURE_FEATURES, *SLOPE_SOURCES),
 }
+AMBIENT_VARIANTS = {
+    "raw": tuple(RAW_SENSOR_COLUMNS),
+    "ambient": (*RAW_SENSOR_COLUMNS, "atmp_t"),
+    "ambient_delta": (
+        *RAW_SENSOR_COLUMNS,
+        "atmp_t",
+        "temp1_minus_ambient",
+        "temp2_minus_ambient",
+    ),
+}
 
 
 def validate_neural_features(names):
@@ -48,7 +58,12 @@ def uses_neural_history(names, imputation="median"):
 
 def sensor_variant(names):
     return next(
-        (name for name, features in TEMPORAL_VARIANTS.items() if tuple(names) == features), "custom"
+        (
+            name
+            for name, features in {**TEMPORAL_VARIANTS, **AMBIENT_VARIANTS}.items()
+            if tuple(names) == features
+        ),
+        "custom",
     )
 
 
