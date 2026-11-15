@@ -1,8 +1,0 @@
-# Reuse the server's compatible torch/torchvision pair. Do not upgrade shared CUDA/torch.
-torch
-torchvision
-numpy
-pillow>=9.0
-transformers>=4.36,<5
-safetensors
-ipykernel

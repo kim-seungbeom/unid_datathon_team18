@@ -1,2 +1,0 @@
--r requirements-common.txt
-matplotlib>=3.9,<4

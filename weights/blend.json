@@ -1,0 +1,15 @@
+{
+  "blend": [
+    [
+      "base",
+      0.5
+    ],
+    [
+      "base_img16_delta",
+      0.5
+    ]
+  ],
+  "post_mode": "mask_cummax",
+  "seed": 42,
+  "img_pcs": 16
+}
