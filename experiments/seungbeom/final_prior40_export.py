@@ -35,12 +35,37 @@ def correction_at(path):
     return correction
 
 
+def correction_rejection(path):
+    """Fixed diagnostic codes only; never echo priors, labels or JSON contents."""
+    try:
+        value = locator.read_json(path)
+    except (OSError, ValueError):
+        return "unreadable_or_invalid_json"
+    if value.get("base_method") != "inner_best_40_60":
+        return "not_40_60_correction"
+    if value.get("kind") != pc.KIND:
+        return "unsupported_correction_kind"
+    if value.get("this_file_sha256") != locator.SOURCE_SHA:
+        return "generator_source_hash_missing_or_different"
+    if value.get("rule") != "argmax(p_blend / prior**tau)":
+        return "unsupported_correction_rule"
+    return "invalid_prior_tau_or_contract"
+
+
 def discover(args):
     if args.output.exists():
         raise ValueError("Discovery output exists; choose a new filename.")
     roots = locator.roots_for(args.runs_root or [ROOT / "runs"], args.team_home)
     files, errors = locator.inventory(roots)
-    result = {"kind": KIND, "corrections": [], "recipes": [], "scan_errors": errors}
+    result = {
+        "kind": KIND,
+        "corrections": [],
+        "recipes": [],
+        "scan_errors": errors,
+        "search_roots": list(map(str, roots)),
+        "rejected_corrections": [],
+        "correction_files_seen": sum(p.name == "correction.json" for p in files),
+    }
     seen = {"corrections": set(), "recipes": set()}
     for path in files:
         # Never inspect any original submission CSV or its manifest.
@@ -59,12 +84,32 @@ def discover(args):
                 seen[group].add(digest)
                 result[group].append({"path": str(path.resolve()), "sha256": digest, **detail})
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            if path.name == "correction.json":
+                result["rejected_corrections"].append(
+                    {
+                        "path": str(path),
+                        "reason": correction_rejection(path),
+                    }
+                )
             continue
     locator.write_new(args.output, result)
+    print(
+        f"Searched roots: {len(roots)}; correction.json files: "
+        f"{result['correction_files_seen']}; unreadable paths: {len(errors)}"
+    )
+    for root in roots:
+        print("  search root:", root)
     for group in ("corrections", "recipes"):
         print(f"{group}: {len(result[group])}")
         for item in result[group]:
             print(" ", item["path"], f"tau={item['tau']}" if "tau" in item else "")
+    for item in result["rejected_corrections"]:
+        print("Rejected correction:", item["path"], "reason=" + item["reason"])
+    if not result["corrections"]:
+        print(
+            "No accepted prior40 settings. This is not fixed by rerunning predict. "
+            "Locate the saved correction, or create a NEW Train-only correction experiment."
+        )
     print("Only one of each permits automatic selection; otherwise specify both paths.")
     print("No original CSV, weights, OOF rows, or Test read. Report:", args.output)
     return result
@@ -82,7 +127,10 @@ def choose_paths(args):
     for group in ("corrections", "recipes"):
         choices = report[group]
         if len(choices) != 1:
-            raise ValueError("Missing or ambiguous saved artifacts; specify both paths explicitly.")
+            raise ValueError(
+                f"Missing or ambiguous saved artifacts: {group}={len(choices)}. "
+                "Read discovery diagnostics; missing settings cannot be inferred from the recipe."
+            )
         item = choices[0]
         path = Path(item["path"])
         if pc.sha256(path) != item["sha256"]:

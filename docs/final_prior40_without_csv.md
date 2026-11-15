@@ -40,6 +40,15 @@ python experiments/seungbeom/final_prior40_export.py discover \
 둘 중 하나라도 0개면 그 저장 파일의 위치가 추가로 필요하다. 30:70 설정을 대신 쓰거나
 tau를 추측하지 않는다. 설정은 발견돼도 연결된 가중치가 없으면 추론 시작 전에 중단한다.
 
+검색기는 전체 `correction.json` 발견 수와 제외 이유도 출력한다.
+`not_40_60_correction`은 다른 비율의 설정이며,
+`generator_source_hash_missing_or_different`는 생성 코드 버전을 확인해야 한다는 뜻이다.
+파일이 아예 없는 경우와 검사에서 제외된 경우를 구분하고, 검사 자체를 우회하지 않는다.
+기존 검색 보고서가 있으면 `--output runs/seungbeom/prior40_saved_artifacts_v2.json`처럼
+새 경로를 사용한다. 사용할 수 있는 40:60 보정 파일이 없다면 이전 모델을 정확히 복원할 수
+없다. Train OOF에서 40:60용 보정을 새로 학습하는 작업은 별도의 새 실험이며, 과거 최고
+제출물의 복원으로 표시하면 안 된다.
+
 ## tmux에서 추론
 
 ```bash

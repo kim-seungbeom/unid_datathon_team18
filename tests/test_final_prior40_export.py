@@ -48,12 +48,52 @@ def test_discovery_selects_only_prior40_and_never_opens_original_csv(tmp_path, m
 
     monkeypatch.setattr(export.pc, "sha256", guarded)
     output = tmp_path / "found.json"
-    export.discover(argparse.Namespace(runs_root=[runs], team_home=None, output=output))
+    report = export.discover(argparse.Namespace(runs_root=[runs], team_home=None, output=output))
+    assert report["correction_files_seen"] == 2
+    assert report["rejected_corrections"][0]["reason"] == "not_40_60_correction"
     args = argparse.Namespace(discovery=output, correction=None, recipe=None)
     assert export.choose_paths(args) == (correction, recipe)
     correction.write_text("changed")
     with pytest.raises(ValueError, match="changed since discovery"):
         export.choose_paths(args)
+
+
+def test_missing_source_hash_is_reported_without_printing_private_values(tmp_path, capsys):
+    runs = tmp_path / "runs"
+    put(
+        runs / "prior" / "correction.json",
+        {
+            "base_method": "inner_best_40_60",
+            "kind": export.pc.KIND,
+            "private_example": "SYNTHETIC_CONTENT_MUST_NOT_PRINT",
+        },
+    )
+    result = export.discover(
+        argparse.Namespace(
+            runs_root=[runs],
+            team_home=None,
+            output=tmp_path / "discovery.json",
+        )
+    )
+    assert result["corrections"] == []
+    assert result["rejected_corrections"][0]["reason"] == (
+        "generator_source_hash_missing_or_different"
+    )
+    assert "SYNTHETIC_CONTENT_MUST_NOT_PRINT" not in capsys.readouterr().out
+
+
+def test_no_correction_files_distinguished_from_rejected_files(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    result = export.discover(
+        argparse.Namespace(
+            runs_root=[runs],
+            team_home=None,
+            output=tmp_path / "discovery.json",
+        )
+    )
+    assert result["correction_files_seen"] == 0
+    assert result["rejected_corrections"] == []
 
 
 def test_ambiguous_discovery_never_guesses(tmp_path):
