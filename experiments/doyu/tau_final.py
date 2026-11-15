@@ -209,6 +209,8 @@ def compare(args):
     same_order = a.sample_id.tolist() == b.sample_id.tolist()
     print(f"rows={len(a)}  label_differences={diff}  same_row_order={same_order}")
     print("IDENTICAL" if diff == 0 else "DIFFERENT")
+    if diff:
+        raise SystemExit(1)
     return diff
 
 
