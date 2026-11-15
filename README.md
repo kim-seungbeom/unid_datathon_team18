@@ -20,6 +20,32 @@ python -m pip install -r requirements.txt
 
 출처: [ResNet18 공식 문서](https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.resnet18.html), [torchvision BSD-3-Clause 라이선스](https://github.com/pytorch/vision/blob/main/LICENSE). 소프트웨어 라이선스와 가중치·원 학습 데이터의 사용 조건은 구분한다.
 
+## 저장소 구성
+
+최종 제출 진입점은 저장소 루트의 `test.py`이며 기본 가중치 경로는 `weights/`다. 복원된 `experiments/doyu/`, `experiments/seungbeom/`, `configs/`, `docs/`, `image_features/` 등은 팀원별 실험과 개발 기록을 보존한다. 각 실험은 당시의 실행 환경과 설정을 참고하며, 최종 추론은 루트의 제출 코드로 실행한다.
+
+최종 추론에 필요한 파일은 다음과 같다.
+
+```text
+test.py
+model.py
+features.py
+postprocess.py
+evaluate.py
+encoders.py
+requirements.txt
+weights/
+  blend.json
+  member_base/
+    config.json
+    model.joblib
+  member_base_img16_delta/
+    config.json
+    model.joblib
+```
+
+`model.py`는 같은 폴더의 `features.py`, `postprocess.py`, `evaluate.py`, `encoders.py`를 사용한다. 실행 시 다른 작업 폴더의 코드나 사전 계산한 Test 피처를 가져올 필요는 없다. `train.py`는 재학습용이며 위 추론 명령에서는 실행하지 않는다.
+
 ## 구성과 학습
 
 - `model.py`, `features.py`, `postprocess.py`: 모델·과거 피처·인과 후처리.
@@ -30,10 +56,10 @@ python -m pip install -r requirements.txt
 - `tests/`: 실제 대회 데이터를 사용하지 않는 합성 테스트.
 
 ```bash
-python train.py --data_dir <데이터 폴더> --out weights --device cuda
+python train.py --data_dir <데이터 폴더> --out weights_retrained --device cuda
 ```
 
-학습 시 데이터는 `train/train.csv`, `validation/validation.csv` 또는 루트의 `train.csv`, `validation.csv` 구조를 지원한다. CSV의 상위 폴더가 해당 이미지 루트다. 기존 가중치를 보존한 별도 출력 폴더를 지정하는 것을 권장한다. 운영진 재현에는 학습이 필요 없다.
+학습 시 데이터는 `train/train.csv`, `validation/validation.csv` 또는 루트의 `train.csv`, `validation.csv` 구조를 지원한다. CSV의 상위 폴더가 해당 이미지 루트다. 위 예시는 기존 제출 가중치를 보존하기 위해 별도 출력 폴더 `weights_retrained/`를 사용한다. 재학습 가중치를 추론하려면 `test.py`에 `--artifacts weights_retrained`를 지정한다. 운영진 재현에는 학습이 필요 없다.
 
 기본 최종 학습 구성은 Train+Validation이다. 검증은 실험 단위 GroupKFold OOF와 Train만 학습한 공식 Validation으로 구분한다. PCA는 각 학습 부분에서만 fit한다. Validation을 사용해 선택한 설정의 Validation 성능은 낙관적일 수 있다. 이 배포 정리에서 실데이터 학습·성능 재측정은 실행하지 않았다.
 
@@ -47,12 +73,19 @@ python train.py --data_dir <데이터 폴더> --out weights --device cuda
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m pytest -q tests -p no:cacheprovider
+python -m pytest -q tests/test_features.py tests/test_blend.py tests/test_image_path.py tests/test_submission.py -p no:cacheprovider
 python check_submission.py --data_dir <데이터 폴더> --final <최종 CSV>
 ```
 
+위 pytest 명령은 최종 블렌드 제출 코드의 합성 테스트 4개 파일을 지정한다. `tests/`에는 복원된 과거 실험용 테스트도 함께 있으므로 전체 테스트와 제출 모델용 테스트를 구분한다.
+
 동봉 `check_submission.py`는 팀 자체 검사 도구이며 운영진 배포본이 아니다. 공식 스크립트를 확보하면 추가로 실행해야 한다. 실제 데이터 점검은 대회 서버에서 사용자가 실행한다. 실제 최종 CSV와의 일치 여부는 이 배포 작업에서 확인하지 않았다. 최종 선택 CSV는 반드시 이 폴더의 `test.py`로 생성해야 한다.
 
-원본 CSV·이미지·예측 파일·임베딩·서버 접속 정보·비밀정보는 제출 저장소에 포함하지 않는다. `MANIFEST.json`은 배포 파일의 SHA256을 기록한다.
+원본 CSV·이미지·예측 파일·임베딩·서버 접속 정보·비밀정보는 제출 저장소에 포함하지 않는다. `MANIFEST.json`은 명시된 제출 패키지 파일의 SHA256과 크기를 기록한다. 복원된 팀원 실험 파일 전체의 목록은 아니다.
 
-배포 폴더 자체에서 실행한 합성 테스트: **30 passed (2026-11-15)**. 최종 CSV 실데이터 일치 검사와는 별개다.
+검증 기록과 범위:
+
+- 제출 패키지에서 실행한 위 합성 테스트: **30 passed (2026-11-15)**.
+- 원본 최종 블렌드 코드의 CPU 추론 기록: 3,451행 생성, 출력 열·입력 순서·ID 중복·정수 라벨 범위 검사 통과.
+- 복구 커밋 `346a2ae`: 삭제된 187개 파일을 기존 Git blob과 대조해 복원하고, 기존 제출 파일 28개가 바뀌지 않았음을 확인.
+- 위 기록을 복구된 `main`의 실제 데이터 전체 재현 검사나 DAKER 최종 선택 CSV 일치 검사 완료로 해석하지 않는다. 최종 파일 비교, 반복 실행, 행 섞기, 실험 분리, 미래 행 제거는 해당 검사 결과로 별도 확인한다.
