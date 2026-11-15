@@ -1,3 +1,7 @@
 # Preserve the organizer's existing CUDA build on the GPU server.
 torch
 -r requirements-common.txt
+# Final model (weights/tau_final): pickle-compatible versions used to save the models.
+torchvision
+scikit-learn==1.7.2
+joblib==1.6.0

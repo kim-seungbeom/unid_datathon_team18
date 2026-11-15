@@ -1,4 +1,101 @@
-# Uni-D 데이터톤 Team 18
+# Uni-D 데이터톤 Team 18 — 최종 제출
+
+최종 선택 파일: **`submission_inner_best_40_60_prior_tau.csv`**
+
+열화상 이미지와 센서 5개로 현재 관측의 배터리 열폭주 단계(1~6)를 분류한다. 두 모델의 클래스 확률을
+**inner_best 신경망 0.4 : ExtraTrees 0.6**으로 평균한 뒤, Train 클래스 비율로 **tau 사전확률 보정**을 적용한다.
+
+```
+최종 단계 = argmax_c ( p_c / π_c^τ ),   p = 0.4·p_NN + 0.6·p_ET
+```
+
+## 실행 방법 (재학습 없음)
+
+```bash
+python -m pip install -r requirements.txt
+python test.py --input <test.csv> --image_root <이미지 폴더> --output <저장 경로>
+```
+
+- 그 밖의 인자는 모두 기본값이 있다. 기본 가중치는 `weights/tau_final/`이다.
+- `--device`의 기본값은 `auto`로, CUDA가 있으면 GPU를 쓴다. 제출 CSV는 대회 GPU 서버(CUDA)에서 만들었다.
+- 결과는 입력 CSV의 행 순서대로 `sample_id,label`로 저장한다. 출력 파일이 이미 있으면 덮어쓰지 않는다.
+- 입력 CSV에 있는 행과 그 행의 이미지만 사용한다. 과거·미래 행이나 다른 실험의 값을 쓰지 않으므로, 일부 행만 넣거나 실험별로 나눠 넣어도 같은 샘플의 예측은 같다.
+- 시드를 고정한다(신경망 42, 트리 쪽 `final.json`에 기록).
+
+```text
+weights/tau_final/
+  final.json          비율 0.4, prior π, tau, 이미지 연산 정밀도, 신경망 설정, 파일 sha256
+  inner_best.pt       inner_best 신경망 가중치(고정 ResNet18 포함) + 센서 전처리(중앙값·표준화)
+  extra_trees.joblib  ExtraTrees 파이프라인(센서 중앙값 대체, 이미지 표준화 + PCA 32차원)
+```
+
+가중치 파일이 100MB를 넘어 레포에 없으면 아래 링크에서 받아 `weights/tau_final/`에 둔다. 불러올 때 `final.json`의 sha256과 대조한다.
+
+- 가중치 다운로드: (링크 기재)
+
+재현 점검:
+
+```bash
+python check_submission.py --data_dir <데이터 폴더> --final <최종 CSV>
+python experiments/doyu/tau_final.py compare <원본 CSV> <test.py 출력 CSV>
+```
+
+## 개발 환경
+
+- OS: Linux 5.15 (Ubuntu, glibc 2.35), 대회 제공 GPU 서버
+- GPU: NVIDIA GeForce RTX 5080
+- Python 3.10.12
+- torch 2.11.0+cu128, torchvision 0.26.0+cu128, numpy 2.2.6, pandas 2.3.3, scikit-learn 1.7.2, joblib 1.6.0, Pillow 12.3.0
+- 저장된 joblib 모델 호환을 위해 scikit-learn·joblib은 위 버전을 쓴다.
+
+## 모델 구성
+
+| 구성 | 내용 |
+|---|---|
+| 입력 | 현재 행의 열화상 이미지 1장 + 센서 5개(`meas_v`, `meas_a`, `meas_t1`, `meas_t2`, `meas_p`) |
+| 이미지 인코더 | ImageNet 사전학습 ResNet18, 가중치 전체 고정, 224 letterbox + ImageNet 정규화 |
+| 멤버 ① 신경망 (0.4) | 이미지 512차원 + 센서 MLP(중앙값 대체·표준화) concat 분류기. AdamW 1e-4, 일반 CE, seed 42. Train 내부 holdout의 Macro-F1 최고 epoch(`inner_best`) |
+| 멤버 ② ExtraTrees (0.6) | 이미지 512 → 표준화 → PCA 32 + 센서 5개(중앙값 대체). 400그루, min_samples_leaf 2, max_features 0.8 |
+| 결합 | 6단계 확률의 가중 평균(라벨 평균 아님). 비율 후보 50:50·40:60·60:40만 비교 |
+| 후처리 | `p_c / π_c^τ` 후 argmax. π는 Train 단계 비율, τ는 0~2(0.05 간격)에서 Train group OOF로 선택 |
+
+## 학습·검증 데이터 구성
+
+- 모든 분할은 `experiment_id` 단위로 나눈다. 같은 실험의 행은 학습과 검증에 함께 들어가지 않는다.
+- 전처리(결측 대체·표준화·PCA)와 모델은 학습 부분에서만 fit한다.
+- 신경망: Train 내부 `StratifiedGroupKFold(5)` 첫 분할의 holdout으로 epoch를 고른다(inner_best). 공식 Validation은 epoch 선택에 쓰지 않는다.
+- ExtraTrees: Train 전체로 학습한다. Train `GroupKFold(5)` OOF로 진단한다.
+- 비율(40:60): 공식 Validation에서 고정 후보 3개를 비교해 골랐다. 그래서 이 Validation 점수는 낙관적일 수 있다.
+- tau: Train OOF로만 고른다. 신경망 OOF는 fold마다 head를 다시 학습한 proxy다. 채택 여부는 nested OOF(다른 fold로 고르고 남은 fold에 적용)가 보정 없음보다 엄격히 높을 때만 정한다. 공식 Validation은 선택 후 확인에만 썼다.
+- Test는 추론에만 사용한다. Test로 학습·전처리 fit·의사 라벨링을 하지 않는다.
+
+## 시계열 피처 구성
+
+최종 모델은 **시계열(과거 행) 피처를 쓰지 않는다**. 현재 행의 센서값과 현재 이미지만 사용한다.
+과거 30초 평균·변화량, 직전값 대체 같은 인과적 시계열 피처는 별도 실험으로 비교했다
+(`docs/temporal_sensor_experiments.md`, `docs/sensor_ablation_experiments.md`). 하지만 부분 입력 시 예측이 달라질 위험과 일반화 문제 때문에 최종 모델에서는 제외했다.
+
+## 사전학습 모델
+
+- torchvision `ResNet18_Weights.IMAGENET1K_V1` (ImageNet-1k). 대회 시작 전에 공개된 범용 가중치다.
+  - 출처: https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.resnet18.html
+  - 버전: torchvision 0.26.0
+  - 라이선스: torchvision BSD-3-Clause (https://github.com/pytorch/vision/blob/main/LICENSE)
+- 신경망 체크포인트 `inner_best.pt`에는 고정된 ResNet18 가중치가 함께 저장돼 있다. ExtraTrees 쪽은 첫 실행 때 torchvision 공식 가중치를 내려받는다(인터넷 또는 torchvision 캐시 필요). 대회 데이터는 외부로 보내지 않는다.
+
+## 학습 재현 (참고)
+
+최종 가중치는 아래 순서로 만들었다. 제출 재현(`test.py`)에는 필요 없다.
+
+1. ExtraTrees: `experiments/seungbeom/classwise_ensemble.py train` (resnet18, folds 5, pca_dim 32, seed 42) — `experiments/seungbeom/README.md`
+2. 고정 ResNet18 신경망 → inner_best 체크포인트: `experiments/seungbeom/resnet_finetune.py`, `frozen_tree_blend.py`, `frozen_checkpoint.py train` — `experiments/seungbeom/RESNET_FINETUNE.md`, `FROZEN_TREE_BLEND.md`, `FROZEN_CHECKPOINT.md`
+3. 비율 비교: `experiments/seungbeom/inner_best_ratios.py compare` — `INNER_BEST_RATIOS.md`
+4. tau 선택: `experiments/doyu/prior_correction.py oof` → `select` → `validate`
+5. 제출 묶음: `experiments/doyu/tau_final.py export --recipe <recipe.json> --correction <correction.json>`
+
+---
+
+# 팀 개발 기록
 
 열화상 이미지와 센서 정보를 함께 사용하여 현재 관측의 배터리 열폭주 단계를 `1..6`으로 분류하는 초기 구현입니다. 공식 베이스라인 v7의 입력·출력 계약을 참고하고 이미지 CNN + 센서 MLP 결합 모델로 구성했습니다. 실제 대회 데이터 학습이나 성능 검증은 아직 수행하지 않았습니다.
 

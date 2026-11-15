@@ -59,7 +59,8 @@ def main() -> None:
     parser.add_argument("--final", type=Path, required=True)
     parser.add_argument("--sample_submission", type=Path)
     parser.add_argument(
-        "--checkpoint", type=Path, default=Path(__file__).resolve().parent / "weights/model.pt"
+        "--checkpoint", type=Path, default=None,
+        help="Default: weights/tau_final (final model), else weights/model.pt",
     )
     parser.add_argument(
         "--diagnose_history_subset",
@@ -67,9 +68,18 @@ def main() -> None:
         help="Research only: report history-dependent subset differences without failing.",
     )
     args = parser.parse_args()
-    script = Path(__file__).resolve().parent / "test.py"
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    uses_history = SensorPreprocessor.from_dict(checkpoint["preprocessor"]).uses_history
+    here = Path(__file__).resolve().parent
+    script = here / "test.py"
+    if args.checkpoint is None:
+        final = here / "weights/tau_final"
+        args.checkpoint = final if final.is_dir() else here / "weights/model.pt"
+    from experiments.doyu import tau_final
+
+    if tau_final.is_bundle(args.checkpoint):
+        uses_history = False  # current row and its image only
+    else:
+        checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+        uses_history = SensorPreprocessor.from_dict(checkpoint["preprocessor"]).uses_history
     test_root = args.data_dir.resolve() / "test"
     frame = read_frame(test_root / "test.csv")
     for column in ("experiment_id", "relative_time_s"):

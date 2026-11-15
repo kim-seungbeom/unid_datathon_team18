@@ -1,4 +1,9 @@
-"""Submission inference: uses only supplied rows, their images, and the saved checkpoint."""
+"""Submission inference: uses only supplied rows, their images, and the saved checkpoint.
+
+Default: the final model in weights/tau_final/ (inner_best neural 0.4 + ExtraTrees 0.6 + tau
+prior correction, experiments/doyu/tau_final.py). A weights/model.pt FusionClassifier checkpoint
+is still supported with --checkpoint.
+"""
 
 import argparse
 from pathlib import Path
@@ -19,7 +24,8 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--image_root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--checkpoint", "--model", type=Path, default=ROOT / "weights/model.pt")
+    parser.add_argument("--checkpoint", "--model", type=Path, default=None,
+                        help="Default: weights/tau_final (final model), else weights/model.pt")
     parser.add_argument("--batch_size", type=int, default=32, help="Image-loading batch size")
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
@@ -28,6 +34,14 @@ def main() -> None:
         parser.error("batch_size must be positive and num_workers must be nonnegative.")
     if args.output.exists():
         parser.error("Output already exists. Choose a new path to avoid overwriting a file.")
+    if args.checkpoint is None:
+        final = ROOT / "weights/tau_final"
+        args.checkpoint = final if final.is_dir() else ROOT / "weights/model.pt"
+    from experiments.doyu import tau_final
+
+    if tau_final.is_bundle(args.checkpoint):
+        tau_final.run_test(args.input, args.image_root, args.checkpoint, args.output, args.device)
+        return
     if not args.checkpoint.is_file():
         parser.error("Checkpoint is missing. Supply --checkpoint or prepare weights/model.pt.")
 
