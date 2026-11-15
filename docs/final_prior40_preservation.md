@@ -72,10 +72,47 @@ bundle·사용 가능한 동일 해시 소스를 복사한다. 원본은 수정�
 코드 확보가 추가로 필요하다. 기존 참조 경로가 들어 있어 이동 후 바로 실행되는
 `test.py` 패키지로 취급하면 안 된다.
 
-## 3. 아직 남은 최종 확인
+## 3. main 반영 및 캐시 없는 서버 재현 검사
+
+`main`의 `a7c5d64` (PR #9)에 팀원의 `2dae970` 코드가 들어왔고,
+`feat/seungbeom-multimodal-tuning`에도 통합했다. 위 브랜치를 pull한 다음
+locator를 다시 실행한다. 이전 보고서가 있으면 `final_prior40_location_v2.json`처럼
+새 경로를 사용한다. 새 소스가 생기면 이전 보고서의 `missing_sources`도 달라질 수 있다.
+
+제출자가 `[1]` 후보가 실제 최고 파일이라고 확인했고 `artifacts_matched`라면:
+
+```bash
+source /home/ubuntu/seungbeom/venv-ensemble/bin/activate
+tmux new -s seungbeom-final-replay
+```
+
+새 tmux 터미널에서:
+
+```bash
+cd /home/ubuntu/seungbeom/unid_datathon_team18
+source /home/ubuntu/seungbeom/venv-ensemble/bin/activate
+LOKY_MAX_CPU_COUNT=4 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+python -u experiments/seungbeom/final_prior40_verify.py \
+  --location runs/seungbeom/final_prior40_location_v2.json \
+  --candidate 1 \
+  --input /home/ubuntu/data/battery_data_light/test/test.csv \
+  --image_root /home/ubuntu/data/battery_data_light/test \
+  --output_dir runs/seungbeom/final_prior40_replay \
+  --device cuda
+```
+
+저장된 실제 tau를 그대로 쓰며 학습·tau 탐색·확률 캐시는 사용하지 않는다.
+전체 입력 추론과 최대 32행의 역순 부분 입력 검사를 수행한다. 원본 CSV는 예측이
+끝난 뒤 일치 검사와 출력 순서 정렬에만 사용한다. `changed=0`,
+`reordered subset changed=0`을 확인한다. 원본 CSV 바이트 일치 여부도 별도로 기록한다.
+`verification.json`의 `replay_passed`는 재현 검사 통과이며 대회 점수 검증은 아니다.
+일부 행 검사는 모든 가능한 부분집합을 검사한 것은 아니다.
+추론용 환경이 기존 기록과 다르면 중단하며 체크를 우회하지 않는다.
+
+## 4. 아직 남은 최종 확인
 
 제출자가 원본임을 확인한 뒤, 동일한 가중치·전처리·PCA·이미지 인코더·tau로
-캐시 없이 CSV를 다시 생성해 원본 예측과 일치하는지 검사해야 한다.
+위 도구로 캐시 없이 CSV를 다시 생성해 원본 예측과 일치하는지 검사한다.
 부분 입력·행 순서 변경에서도 같은 샘플이 같은 결과인지 확인하고, 이 경로를
 필수 제출 CLI `python test.py --input ... --image_root ... --output ...`에 연결한다.
 현재 저장소 루트의 `test.py`는 초기 모델용이므로 최고 앙상블 실행기로 간주하지 않는다.
